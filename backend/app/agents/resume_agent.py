@@ -53,4 +53,4 @@ Candidate profile:
 {profile}
 {extra}
 """
-    return await run_json_agent(SYSTEM, user, schema=TailoredResume, temperature=0.3)
+    return await run_json_agent(SYSTEM, user, schema=TailoredResume, temperature=0.3, est_output_tokens=3500)

@@ -75,6 +75,14 @@ def public_detail(status: int, detail: object) -> str:
 
 def llm_http_error(exc: Exception) -> tuple[int, str]:
     """Map LLM / agent failures to a safe (status, detail)."""
+    from app.core.llm_router import LLMBusyError, LLMUnavailableError
+
+    if isinstance(exc, LLMBusyError):
+        # Every provider is at its per-minute budget: tell the user when to retry.
+        return 429, f"The AI is busy right now. Please try again in about {exc.retry_after} seconds."
+    if isinstance(exc, LLMUnavailableError):
+        # Nothing in the fallback chain can serve this right now.
+        return 503, PUBLIC_DEFAULTS[503]
     msg = str(exc).lower()
     if isinstance(exc, ValueError):
         # often missing API key
@@ -102,7 +110,7 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception):
-        logger.exception("unhandled error on %s", request.url.path)
+        logger.error("unhandled error on %s %s: %s: %s", request.method, request.url.path, type(exc).__name__, str(exc)[:300])
         return JSONResponse(
             status_code=500,
             content={"detail": PUBLIC_DEFAULTS[500]},

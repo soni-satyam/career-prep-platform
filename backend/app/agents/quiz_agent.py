@@ -32,6 +32,46 @@ Rules:
 """
 
 
+def _make_validator(difficulty: str, wanted: int):
+    """Strict check so a malformed quiz fails over to another provider
+    instead of reaching the UI as an empty list (which made users click again)."""
+    min_ok = max(1, min(wanted, 3))
+
+    def validate(data: dict[str, Any]) -> dict[str, Any]:
+        good = []
+        for i, q in enumerate(data.get("questions") or []):
+            if not isinstance(q, dict):
+                continue
+            options = q.get("options")
+            idx = q.get("correct_index")
+            if (
+                isinstance(q.get("question"), str)
+                and q["question"].strip()
+                and isinstance(options, list)
+                and len(options) == 4
+                and all(isinstance(o, str) and o.strip() for o in options)
+                and isinstance(idx, int)
+                and not isinstance(idx, bool)
+                and 0 <= idx < 4
+            ):
+                good.append(
+                    {
+                        "id": str(q.get("id") or f"q{len(good) + 1}"),
+                        "question": q["question"].strip(),
+                        "options": [o.strip() for o in options],
+                        "correct_index": idx,
+                        "explanation": str(q.get("explanation") or ""),
+                    }
+                )
+        if len(good) < min_ok:
+            raise ValueError(f"only {len(good)} valid quiz questions")
+        data["questions"] = good[:wanted]
+        data.setdefault("difficulty", difficulty)
+        return data
+
+    return validate
+
+
 async def generate_quiz(
     topic: str,
     difficulty: str = "medium",
@@ -44,4 +84,13 @@ Number of questions: {num_questions}
 Extra context (JD / skills, optional):
 {context[:4000] if context else "(none)"}
 """
-    return await run_json_agent(SYSTEM, user, temperature=0.4)
+    # No result cache: "New quiz" must give new questions. dedupe only merges
+    # identical requests that are running at the same moment (double click).
+    return await run_json_agent(
+        SYSTEM,
+        user,
+        temperature=0.4,
+        dedupe=True,
+        validator=_make_validator(difficulty, num_questions),
+        est_output_tokens=300 + 250 * num_questions,
+    )

@@ -6,6 +6,7 @@ Runs: JD analysis → Profile extraction → Gap analysis →
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Optional
 
 from app.agents.gap_agent import analyze_gaps
@@ -29,13 +30,29 @@ Return ONLY valid JSON:
 """
 
 
+# Which optional steps each mode runs. JD analysis and profile extraction always run.
+#   full      -> everything (default; what the API did before)
+#   resume    -> the Resume page shows gaps, tailored resume and resume tips; it never
+#                shows interview Q&A, so that call is skipped.
+#   interview -> the Interview page shows only Q&A + focus areas, so gap analysis,
+#                resume tailoring and the weekly plan are skipped.
+PIPELINE_MODES: dict[str, frozenset[str]] = {
+    "full": frozenset({"gap", "resume", "interview", "plan"}),
+    "resume": frozenset({"gap", "resume", "plan"}),
+    "interview": frozenset({"interview"}),
+}
+
+
 async def run_full_pipeline(
     jd_text: str,
     resume_text: str = "",
     target_role: str = "",
     company: str = "",
+    mode: str = "full",
 ) -> dict[str, Any]:
-    """Execute the full multi-agent preparation pipeline."""
+    """Execute the multi-agent preparation pipeline."""
+    steps = PIPELINE_MODES.get(mode, PIPELINE_MODES["full"])
+    has_resume = bool(resume_text.strip())
 
     result: dict[str, Any] = {
         "jd_analysis": None,
@@ -49,51 +66,57 @@ async def run_full_pipeline(
         "meta": {
             "target_role": target_role,
             "company": company,
+            "mode": mode,
         },
     }
 
-    # 1. JD Analysis
-    result["jd_analysis"] = await analyze_jd(jd_text)
-
-    # 2. Profile Extraction
-    if resume_text.strip():
-        result["profile"] = await extract_profile(resume_text)
+    # 1 + 2. JD analysis and profile extraction don't depend on each other.
+    empty_profile = {
+        "profile_basic": {},
+        "facts": [],
+        "skills": [],
+        "summary": "",
+    }
+    if has_resume:
+        result["jd_analysis"], result["profile"] = await asyncio.gather(
+            analyze_jd(jd_text), extract_profile(resume_text)
+        )
     else:
-        result["profile"] = {
-            "profile_basic": {},
-            "facts": [],
-            "skills": [],
-            "summary": "",
-        }
+        result["jd_analysis"] = await analyze_jd(jd_text)
+        result["profile"] = empty_profile
 
-    # 3. Gap Analysis
-    result["gap_analysis"] = await analyze_gaps(
-        result["jd_analysis"], result["profile"]
-    )
+    jd, profile = result["jd_analysis"], result["profile"]
 
-    # 4. Tailored Resume (only if we have profile material)
-    if resume_text.strip():
-        result["tailored_resume"] = await generate_tailored_resume(
-            result["jd_analysis"], result["profile"]
+    # 3 + 4. Gap analysis and resume tailoring both only need (jd, profile).
+    parallel = []
+    if "gap" in steps:
+        parallel.append(("gap_analysis", analyze_gaps(jd, profile)))
+    if "resume" in steps and has_resume:
+        parallel.append(("tailored_resume", generate_tailored_resume(jd, profile)))
+    if parallel:
+        outputs = await asyncio.gather(*(coro for _, coro in parallel))
+        for (key, _), value in zip(parallel, outputs):
+            result[key] = value
+
+    # 5. Interview pack
+    if "interview" in steps:
+        result["interview_pack"] = await generate_interview_pack(
+            jd, profile, result.get("tailored_resume")
         )
 
-    # 5. Interview Pack
-    result["interview_pack"] = await generate_interview_pack(
-        result["jd_analysis"],
-        result["profile"],
-        result.get("tailored_resume"),
-    )
-
-    # 6. Multi-week plan
-    plan_user = f"""JD analysis: {result['jd_analysis']}
-Profile: {result['profile']}
+    # 6. Multi-week plan (+ resume tips)
+    if "plan" in steps:
+        plan_user = f"""JD analysis: {jd}
+Profile: {profile}
 Gap analysis: {result['gap_analysis']}
-Target role: {target_role or result['jd_analysis'].get('title', '')}
+Target role: {target_role or jd.get('title', '')}
 Company: {company}
 """
-    plan_data = await run_json_agent(PLAN_SYSTEM, plan_user, temperature=0.3)
-    result["preparation_plan"] = plan_data.get("preparation_plan", [])
-    result["estimated_weeks"] = plan_data.get("estimated_weeks", 4)
-    result["resume_tips"] = plan_data.get("resume_tips", [])
+        plan_data = await run_json_agent(
+            PLAN_SYSTEM, plan_user, temperature=0.3, est_output_tokens=2500
+        )
+        result["preparation_plan"] = plan_data.get("preparation_plan", [])
+        result["estimated_weeks"] = plan_data.get("estimated_weeks", 4)
+        result["resume_tips"] = plan_data.get("resume_tips", [])
 
     return result

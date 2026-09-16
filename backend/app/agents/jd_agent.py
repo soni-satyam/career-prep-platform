@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agents.contracts import JDAnalysis
 from app.agents.llm_utils import run_json_agent
+from app.core.config import get_settings
 
 SYSTEM = """You are an expert job description analyst for tech roles.
 Extract structured information from the JD. Return ONLY a valid JSON object, no markdown.
@@ -34,4 +35,6 @@ Rules:
 
 async def analyze_jd(jd_text: str) -> dict[str, Any]:
     user = f"Job Description:\n\n{jd_text.strip()[:15000]}"
-    return await run_json_agent(SYSTEM, user, schema=JDAnalysis)
+    return await run_json_agent(
+        SYSTEM, user, schema=JDAnalysis, cache_ttl=get_settings().llm_cache_ttl_seconds
+    )

@@ -1,6 +1,6 @@
 """Preparation APIs — full pipeline + individual agent endpoints."""
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -15,6 +15,7 @@ from app.agents import (
     generate_tailored_resume,
     run_full_pipeline,
 )
+from app.core.config import get_settings
 from app.core.errors import llm_http_error
 from app.api.deps import get_current_user
 from app.core.database import get_db
@@ -62,6 +63,9 @@ class FullPipelineRequest(BaseModel):
     resume_text: Optional[str] = None
     target_role: Optional[str] = None
     company: Optional[str] = None
+    # full = every agent (default). resume / interview skip the agents that page
+    # never displays, saving 1-3 LLM calls per run. See orchestrator.PIPELINE_MODES.
+    mode: Literal["full", "resume", "interview"] = "full"
 
 
 class SessionOut(BaseModel):
@@ -163,6 +167,7 @@ async def create_session(
             resume_text=body.resume_text or "",
             target_role=body.target_role or "",
             company=body.company or "",
+            mode=body.mode,
         )
     except Exception as e:
         raise _llm_error(e)
@@ -194,9 +199,11 @@ async def create_session(
     await db.flush()
     await db.refresh(session)
 
-    # RAG: ingest JD + resume chunks for this session
+    # RAG: ingest JD + resume chunks for this session.
+    # Nothing reads these vectors yet and every ingest costs embedding calls on the
+    # Gemini key, so it is opt-in (RAG_INGEST_ENABLED=true) until retrieval is used.
     try:
-        if body.jd_text:
+        if get_settings().rag_ingest_enabled and body.jd_text:
             await ingest_text(
                 db,
                 user_id=current_user.id,
@@ -204,7 +211,7 @@ async def create_session(
                 source_type="jd",
                 session_id=session.id,
             )
-        if body.resume_text:
+        if get_settings().rag_ingest_enabled and body.resume_text:
             await ingest_text(
                 db,
                 user_id=current_user.id,

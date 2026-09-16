@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agents.contracts import ProfileExtraction
 from app.agents.llm_utils import run_json_agent
+from app.core.config import get_settings
 
 SYSTEM = """You are an expert at building candidate profiles from resumes and free-form text.
 Extract structured information. Return ONLY a valid JSON object, no markdown.
@@ -42,4 +43,9 @@ async def extract_profile(resume_text: str, existing: dict | None = None) -> dic
 Existing profile (merge, do not overwrite known fields with empty):
 {existing_str}
 """
-    return await run_json_agent(SYSTEM, user, schema=ProfileExtraction)
+    return await run_json_agent(
+        SYSTEM, user, schema=ProfileExtraction,
+        cache_ttl=get_settings().llm_cache_ttl_seconds,
+        est_output_tokens=2000,
+    
+    )

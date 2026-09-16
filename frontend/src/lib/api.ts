@@ -98,13 +98,116 @@ export const featuresApi = {
     ),
 }
 
+export interface JobMatch {
+  score: number
+  matched_skills: string[]
+  missing_skills: string[]
+}
+
+export interface JobResult {
+  id: string
+  title: string
+  company: string
+  location: string
+  remote: boolean
+  work_mode: string
+  url: string
+  source: string
+  source_label: string
+  source_tier: number
+  posted_at: string | null
+  snippet: string
+  employment_type: string
+  seniority: string
+  salary_min: number | null
+  salary_max: number | null
+  salary_currency: string
+  salary_text: string
+  experience_min: number | null
+  experience_max: number | null
+  also_on: Array<{ source: string; label: string; url: string }>
+  match: JobMatch | null
+}
+
+export interface JobSourceStatus {
+  name: string
+  status: 'ok' | 'skipped' | 'error'
+  count: number
+  message: string
+}
+
+export interface JobSearchResponse {
+  results: JobResult[]
+  total: number
+  page: number
+  page_size: number
+  has_more: boolean
+  sources: JobSourceStatus[]
+  facets: Record<string, number>
+  profile_used: boolean
+}
+
+export interface JobSearchParams {
+  q?: string
+  location?: string
+  work_mode?: string
+  salary_min?: number
+  salary_currency?: string
+  include_unspecified_salary?: boolean
+  experience_min?: number
+  experience_max?: number
+  employment_type?: string
+  posted_within_days?: number
+  sources?: string[]
+  sort?: string
+  page?: number
+  page_size?: number
+}
+
+export interface CandidateProfile {
+  has_profile: boolean
+  title: string
+  skills: string[]
+  experience_years: number | null
+  source_filename: string | null
+  updated_at: string | null
+}
+
+function toQuery(params: Record<string, unknown>): string {
+  const sp = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined || v === null || v === '') continue
+    if (Array.isArray(v)) v.forEach((x) => sp.append(k, String(x)))
+    else sp.append(k, String(v))
+  }
+  const s = sp.toString()
+  return s ? `?${s}` : ''
+}
+
 export const jobsApi = {
+  search: (params: JobSearchParams, signal?: AbortSignal) =>
+    api<JobSearchResponse>(`/api/v1/jobs/search${toQuery({ ...params })}`, { signal }),
+  meta: () =>
+    api<{ sources: Array<{ key: string; label: string; tier: number }> }>('/api/v1/jobs/search/meta'),
   list: (q?: string) =>
     api<any[]>(`/api/v1/jobs${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   get: (id: number) => api<any>(`/api/v1/jobs/${id}`),
   companies: (q?: string) =>
     api<any[]>(`/api/v1/jobs/companies${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   company: (id: number) => api<any>(`/api/v1/jobs/companies/${id}`),
+}
+
+export const profileApi = {
+  get: () => api<CandidateProfile>('/api/v1/profile'),
+  uploadResume: (file?: File, text?: string) => {
+    const fd = new FormData()
+    if (file) fd.append('file', file)
+    if (text) fd.append('text', text)
+    return api<CandidateProfile>('/api/v1/profile/resume', { method: 'POST', body: fd })
+  },
+  update: (body: { title?: string; skills?: string[]; experience_years?: number }) =>
+    api<CandidateProfile>('/api/v1/profile', { method: 'PATCH', body: JSON.stringify(body) }),
+  remove: () => api<CandidateProfile>('/api/v1/profile', { method: 'DELETE' }),
 }
 
 export const prepApi = {
@@ -141,6 +244,8 @@ export const prepApi = {
     target_role?: string
     company?: string
     title?: string
+    // 'resume' / 'interview' skip agents the page never shows (fewer LLM calls)
+    mode?: 'full' | 'resume' | 'interview'
   }) =>
     api<any>('/api/v1/prep/sessions', {
       method: 'POST',

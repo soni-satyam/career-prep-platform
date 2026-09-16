@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Type, TypeVar
+from typing import Any, Callable, Type, TypeVar
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
-from app.core.llm import get_chat_model
+from app.core.config import get_settings
+from app.core.llm_cache import cached_call, make_key
+from app.core.llm_router import get_router
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -48,20 +49,52 @@ async def run_json_agent(
     user: str,
     schema: Type[T] | None = None,
     temperature: float = 0.2,
+    *,
+    cache_ttl: int = 0,
+    dedupe: bool = False,
+    validator: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    est_output_tokens: int = 1500,
 ) -> dict[str, Any]:
-    """Call the configured LLM and return parsed JSON (optionally validated)."""
-    llm = get_chat_model(temperature=temperature)
-    messages = [
-        SystemMessage(content=system),
-        HumanMessage(content=user),
-    ]
-    response = await llm.ainvoke(messages)
-    data = parse_json_response(response.content)
+    """Call an LLM (via the provider router) and return parsed JSON.
 
-    if schema is not None and "error" not in data:
-        try:
-            return schema.model_validate(data).model_dump()
-        except Exception:
-            # return raw parsed data if validation fails
-            return data
-    return data
+    cache_ttl  > 0  -> identical (system, user, temperature) is served from cache.
+    dedupe          -> identical requests running at the same moment share one call.
+    validator       -> strict check of the parsed dict. If it raises, the router
+                       fails over to the next provider instead of returning junk.
+    est_output_tokens -> rough size of the answer; used for per-minute token budgets.
+
+    Output that is not valid JSON always triggers failover. Output that is valid
+    JSON but does not match `schema` is returned as-is (same lenient behaviour as
+    before), because the schemas have defaults and another call would only burn quota.
+    """
+    settings = get_settings()
+
+    def parse(text: str) -> dict[str, Any]:
+        data = parse_json_response(text)
+        if not isinstance(data, dict) or ("error" in data and "raw_response" in data):
+            raise ValueError("model did not return a JSON object")
+        if validator is not None:
+            return validator(data)
+        if schema is not None:
+            try:
+                return schema.model_validate(data).model_dump()
+            except Exception:
+                return data
+        return data
+
+    async def compute() -> dict[str, Any]:
+        result, _provider = await get_router().complete(
+            system,
+            user,
+            temperature=temperature,
+            parse=parse,
+            est_output_tokens=est_output_tokens,
+        )
+        return result
+
+    ttl = cache_ttl if (cache_ttl > 0 and settings.llm_cache_enabled) else 0
+    if ttl == 0 and not dedupe:
+        return await compute()
+    return await cached_call(
+        make_key(system, user, temperature), compute, ttl=ttl, dedupe=True
+    )

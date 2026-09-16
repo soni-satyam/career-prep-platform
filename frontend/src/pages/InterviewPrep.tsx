@@ -23,6 +23,7 @@ export default function InterviewPrep() {
         resume_text: resumeText || undefined,
         target_role: role || undefined,
         company: company || undefined,
+        mode: 'interview',
       })
       setPack(session.interview_pack || session.plan)
     } catch (e: any) {

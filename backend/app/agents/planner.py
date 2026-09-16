@@ -9,14 +9,11 @@ Takes a job description + candidate profile/resume text and produces:
 
 from __future__ import annotations
 
-import json
 from typing import Any, Optional
 
-from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.output_parsers import JsonOutputParser
 from pydantic import BaseModel, Field
 
-from app.core.llm import get_chat_model
+from app.agents.llm_utils import run_json_agent
 
 
 class SkillGap(BaseModel):
@@ -92,8 +89,6 @@ async def generate_preparation_plan(
 ) -> dict[str, Any]:
     """Generate a full preparation plan from JD + optional resume."""
 
-    llm = get_chat_model(temperature=0.2)
-
     user_content = f"""Target Role: {target_role or "Not specified"}
 Company: {company or "Not specified"}
 
@@ -105,34 +100,4 @@ Company: {company or "Not specified"}
 
 Create a detailed preparation plan to maximize the chance of landing this role.
 """
-
-    messages = [
-        SystemMessage(content=SYSTEM_PROMPT),
-        HumanMessage(content=user_content),
-    ]
-
-    response = await llm.ainvoke(messages)
-    content = response.content
-
-    # Try to parse JSON (models sometimes wrap in ```json)
-    if isinstance(content, str):
-        text = content.strip()
-        if text.startswith("```"):
-            # strip markdown fence
-            lines = text.split("\n")
-            if lines[0].startswith("```"):
-                lines = lines[1:]
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            text = "\n".join(lines)
-        try:
-            data = json.loads(text)
-            return data
-        except json.JSONDecodeError:
-            # fallback: return raw
-            return {
-                "raw_response": content,
-                "error": "Failed to parse structured JSON from model",
-            }
-
-    return {"raw_response": str(content)}
+    return await run_json_agent(SYSTEM_PROMPT, user_content, temperature=0.2)

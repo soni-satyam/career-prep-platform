@@ -35,7 +35,7 @@ MIN_PER_CATEGORY = {
 # ================= API / server settings =================
 DB_PATH = os.getenv("DB_PATH", "data/career_prep.db")
 CORS_ORIGINS = [o.strip() for o in os.getenv(
-    "CORS_ORIGINS", "http://localhost:5173,http://localhost:3000").split(",") if o.strip()]
+    "CORS_ORIGINS", "http://localhost:5174,http://localhost:3000").split(",") if o.strip()]
 RETENTION_DAYS = int(os.getenv("RETENTION_DAYS", "7"))            # resumes are auto-deleted after this
 MAX_CONCURRENT_RUNS = int(os.getenv("MAX_CONCURRENT_RUNS", "2"))   # protects free-tier rate limits
 RUN_TIMEOUT_SECONDS = int(os.getenv("RUN_TIMEOUT_SECONDS", "240"))

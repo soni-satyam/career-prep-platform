@@ -1,5 +1,6 @@
 """Admin endpoints — manage users and feature flags."""
 
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -31,7 +32,7 @@ class UserAdminOut(BaseModel):
     is_active: bool
     is_superuser: bool
     oauth_provider: Optional[str]
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
@@ -146,3 +147,20 @@ async def update_feature(
     await db.flush()
     await db.refresh(feature)
     return feature
+
+
+# ---------- LLM routing diagnostics ----------
+
+@router.get("/llm-status")
+async def llm_status(_: User = Depends(require_admin)):
+    """The fallback chain as the server sees it: which entries are active, budget
+    used in the last minute, cooldowns after 429s, disabled providers (bad key /
+    no credits) and the last error of each entry."""
+    from app.core.llm_router import get_router
+
+    r = get_router()
+    return {
+        "chain": r.chain,
+        "skipped_entries": r.skipped,
+        "entries": r.status(),
+    }

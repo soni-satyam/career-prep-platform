@@ -48,4 +48,4 @@ Candidate profile:
 
 Generate about {num_questions} high-quality interview Q&As.
 """
-    return await run_json_agent(SYSTEM, user, schema=InterviewPack, temperature=0.4)
+    return await run_json_agent(SYSTEM, user, schema=InterviewPack, temperature=0.4, est_output_tokens=4000)

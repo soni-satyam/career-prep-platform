@@ -6,6 +6,7 @@ from typing import Any
 
 from app.agents.contracts import GapAnalysis
 from app.agents.llm_utils import run_json_agent
+from app.core.config import get_settings
 
 SYSTEM = """You are an expert career gap analyst for tech candidates.
 Compare the job requirements against the candidate profile and identify gaps and strengths.
@@ -39,4 +40,6 @@ async def analyze_gaps(jd_analysis: dict, profile: dict) -> dict[str, Any]:
 Candidate profile:
 {profile}
 """
-    return await run_json_agent(SYSTEM, user, schema=GapAnalysis)
+    return await run_json_agent(
+        SYSTEM, user, schema=GapAnalysis, cache_ttl=get_settings().llm_cache_ttl_seconds
+    )

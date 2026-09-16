@@ -4,8 +4,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 
-from app.api import admin, auth, features, health, jobs, live_interview, prep, quizzes, users
+from app.api import admin, auth, features, health, job_search, jobs, live_interview, prep, profile, quizzes, users
 from app.core.config import get_settings
+from app.core.logging_config import setup_logging
 from app.core.errors import register_exception_handlers
 from app.core.database import AsyncSessionLocal, Base, engine
 from app.core.redis import close_redis, get_redis
@@ -14,6 +15,7 @@ from app.models.feature import FeatureFlag
 from app.models.user import User
 
 settings = get_settings()
+setup_logging(settings)
 
 DEFAULT_FEATURES = [
     ("resume_tailor", "Resume Tailoring", "AI-powered resume customization for a JD"),
@@ -55,6 +57,9 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     await get_redis()
     await seed_defaults()
+    from app.core.llm_router import get_router
+
+    get_router()  # builds the LLM fallback chain and logs it (and any missing keys)
     yield
     await close_redis()
     await engine.dispose()
@@ -81,7 +86,9 @@ app.include_router(health.router)
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
 app.include_router(prep.router, prefix="/api/v1")
+app.include_router(job_search.router, prefix="/api/v1")  # must be before jobs: "/jobs/search" vs "/jobs/{job_id}"
 app.include_router(jobs.router, prefix="/api/v1")
+app.include_router(profile.router, prefix="/api/v1")
 app.include_router(quizzes.router, prefix="/api/v1")
 app.include_router(live_interview.router, prefix="/api/v1")
 app.include_router(features.router, prefix="/api/v1")

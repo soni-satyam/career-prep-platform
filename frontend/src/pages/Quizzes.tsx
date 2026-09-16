@@ -19,6 +19,7 @@ export default function Quizzes() {
   const [submitted, setSubmitted] = useState(false)
 
   const generate = async () => {
+    if (loading) return // ignore double clicks: every request is an LLM call
     setLoading(true)
     setError(null)
     setSubmitted(false)
@@ -124,9 +125,10 @@ export default function Quizzes() {
               Score: <span className="text-white font-semibold">{score}</span> / {questions.length}
               <button
                 onClick={generate}
-                className="ml-4 text-zinc-400 hover:text-white underline"
+                disabled={loading}
+                className="ml-4 text-zinc-400 hover:text-white underline disabled:opacity-50"
               >
-                New quiz
+                {loading ? 'Generating…' : 'New quiz'}
               </button>
             </div>
           )}

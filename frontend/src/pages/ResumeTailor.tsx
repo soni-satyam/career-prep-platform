@@ -33,11 +33,12 @@ export default function ResumeTailor() {
     }
     setError(null)
     setLoading(true)
-    setStatusMsg('Running multi-agent pipeline (JD → profile → gaps → resume → interview → plan)…')
+    setStatusMsg('Running multi-agent pipeline (JD → profile → gaps → resume → tips)…')
     try {
       const session = await prepApi.createSession({
         jd_text: jdText,
         resume_text: resumeText,
+        mode: 'resume',
       })
       setResult(session)
       setStep('result')

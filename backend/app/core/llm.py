@@ -1,4 +1,8 @@
-"""LLM factory — supports free providers (Gemini primary, Groq secondary)."""
+"""Single-provider LLM factory (legacy).
+
+Agents no longer use this: they go through app.core.llm_router, which handles
+provider failover, per-provider rate budgets and caching. Kept for compatibility.
+"""
 
 from __future__ import annotations
 
@@ -37,6 +41,7 @@ def get_chat_model(
             model=model,
             google_api_key=settings.google_api_key,
             temperature=temperature,
+            max_retries=kwargs.pop("max_retries", 0),
             **kwargs,
         )
 
@@ -51,6 +56,7 @@ def get_chat_model(
             model=model,
             api_key=settings.groq_api_key,
             temperature=temperature,
+            max_retries=kwargs.pop("max_retries", 0),
             **kwargs,
         )
 
@@ -63,6 +69,7 @@ def get_chat_model(
             model=model,
             api_key=settings.openai_api_key,
             temperature=temperature,
+            max_retries=kwargs.pop("max_retries", 0),
             **kwargs,
         )
 
