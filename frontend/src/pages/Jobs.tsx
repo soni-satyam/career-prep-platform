@@ -85,6 +85,49 @@ function toParams(f: Filters, page: number): JobSearchParams {
   }
 }
 
+const WORK_MODE_LABEL: Record<string, string> = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' }
+const TYPE_LABEL: Record<string, string> = {
+  'full-time': 'Full-time',
+  'part-time': 'Part-time',
+  contract: 'Contract',
+  internship: 'Internship',
+}
+const POSTED_LABEL: Record<string, string> = {
+  '1': 'Last 24 hours',
+  '3': 'Last 3 days',
+  '7': 'Last week',
+  '14': 'Last 2 weeks',
+  '30': 'Last month',
+}
+
+// One chip per filter that is actually applied to the current results.
+function activeChips(f: Filters): Array<{ key: string; label: string; clear: Partial<Filters> }> {
+  const chips: Array<{ key: string; label: string; clear: Partial<Filters> }> = []
+  if (f.work_mode) chips.push({ key: 'work_mode', label: WORK_MODE_LABEL[f.work_mode] ?? f.work_mode, clear: { work_mode: '' } })
+  if (f.employment_type)
+    chips.push({ key: 'type', label: TYPE_LABEL[f.employment_type] ?? f.employment_type, clear: { employment_type: '' } })
+  if (f.posted) chips.push({ key: 'posted', label: POSTED_LABEL[f.posted] ?? `Last ${f.posted} days`, clear: { posted: '' } })
+  if (f.salary.trim() && parseFloat(f.salary) > 0)
+    chips.push({
+      key: 'salary',
+      label: `Salary ≥ ${f.salary}${f.currency === 'INR' ? 'L' : 'k'} ${f.currency}${f.includeNoSalary ? '' : ' (listed only)'}`,
+      clear: { salary: '' },
+    })
+  if (f.expMin.trim() || f.expMax.trim())
+    chips.push({
+      key: 'exp',
+      label: `Exp ${f.expMin.trim() || '0'}–${f.expMax.trim() || '∞'} yrs`,
+      clear: { expMin: '', expMax: '' },
+    })
+  if (f.sources.length)
+    chips.push({
+      key: 'sources',
+      label: f.sources.map((k) => SOURCES.find((x) => x.key === k)?.label ?? k).join(', '),
+      clear: { sources: [] },
+    })
+  return chips
+}
+
 function timeAgo(iso: string | null): string {
   if (!iso) return 'Date not listed'
   const diff = Date.now() - new Date(iso).getTime()
@@ -404,6 +447,7 @@ export default function Jobs() {
   const [jobs, setJobs] = useState<JobResult[]>([])
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
+  const [refreshing, setRefreshing] = useState(false) // a fresh search (not "Load more") is in flight
   const [error, setError] = useState('')
   const [profile, setProfile] = useState<CandidateProfile | null>(null)
   const [profileLoaded, setProfileLoaded] = useState(false) // first search waits for this, so it runs once
@@ -426,6 +470,7 @@ export default function Jobs() {
     const ctl = new AbortController()
     abortRef.current = ctl
     setLoading(true)
+    setRefreshing(!append)
     setError('')
     try {
       const res = await jobsApi.search(toParams(f, pg), ctl.signal)
@@ -437,7 +482,10 @@ export default function Jobs() {
       setError(e instanceof Error ? e.message : 'Search failed')
       if (!append) setJobs([])
     } finally {
-      if (!ctl.signal.aborted) setLoading(false)
+      if (!ctl.signal.aborted) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
   }, [])
 
@@ -462,15 +510,13 @@ export default function Jobs() {
   }
 
   const problems = useMemo(() => (data?.sources ?? []).filter((s) => s.status !== 'ok'), [data])
-  const activeFilterCount = [
-    filters.work_mode,
-    filters.salary,
-    filters.expMin,
-    filters.expMax,
-    filters.employment_type,
-    filters.posted,
-    filters.sources.length ? 'x' : '',
-  ].filter(Boolean).length
+  const chips = useMemo(() => activeChips(committed), [committed])
+  const activeFilterCount = chips.length
+  const removeChip = (clear: Partial<Filters>) => {
+    setFilters((f) => ({ ...f, ...clear }))
+    setCommitted((c) => ({ ...c, ...clear }))
+    setHasSearched(true)
+  }
 
   return (
     <div className="p-4 sm:p-8 max-w-5xl">
@@ -639,7 +685,14 @@ export default function Jobs() {
           </div>
 
           <div className="sm:col-span-2 lg:col-span-3 flex gap-2">
-            <button type="button" onClick={() => apply()} className="bg-white text-black text-sm font-medium px-4 py-2 rounded-md">
+            <button
+              type="button"
+              onClick={() => {
+                apply()
+                setShowFilters(false)
+              }}
+              className="bg-white text-black text-sm font-medium px-4 py-2 rounded-md"
+            >
               Apply filters
             </button>
             <button
@@ -657,12 +710,33 @@ export default function Jobs() {
         </div>
       )}
 
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          {chips.map((c) => (
+            <span
+              key={c.key}
+              className="inline-flex items-center gap-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded-full pl-2.5 pr-1.5 py-1 text-zinc-200"
+            >
+              {c.label}
+              <button
+                type="button"
+                aria-label={`Remove filter ${c.label}`}
+                onClick={() => removeChip(c.clear)}
+                className="text-zinc-400 hover:text-white leading-none px-1"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {error && <div className="text-sm text-red-400 mb-3">{error}</div>}
 
       {data && (
         <div className="flex items-center justify-between text-xs text-zinc-500 mb-3 gap-3 flex-wrap">
           <span>
-            {data.total} job{data.total === 1 ? '' : 's'} found
+            {refreshing ? 'Updating results…' : `${data.total} job${data.total === 1 ? '' : 's'} found`}
             {!data.profile_used && ' · upload a resume to see match %'}
           </span>
           {problems.length > 0 && (
@@ -686,7 +760,7 @@ export default function Jobs() {
 
       {loading && jobs.length === 0 && <p className="text-sm text-zinc-500">Searching all sources…</p>}
 
-      <div className="space-y-3">
+      <div className={`space-y-3 transition-opacity ${refreshing && jobs.length > 0 ? 'opacity-40 pointer-events-none' : ''}`}>
         {jobs.map((j) => (
           <JobCard key={j.id} job={j} />
         ))}

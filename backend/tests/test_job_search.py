@@ -198,6 +198,24 @@ def test_filters():
     assert not passes_filters(job(title="Sales Manager"), f(q="python developer"), search_locally=True)
 
 
+def test_work_mode_and_type_filters_use_text_when_source_is_silent():
+    """Greenhouse-style postings carry no work_mode / employment_type; the filters must still bite."""
+    f = lambda **k: SearchFilters(**k)           # noqa: E731
+    plain = job()                                              # city, no hints -> on-site, full-time
+    hybrid = job(title="Backend Engineer - Hybrid")
+    remote = job(loc="Remote - India")
+    intern = job(title="Backend Engineer Intern")
+    contract = job(title="Backend Engineer (Contract)")
+    ok = lambda j, **k: passes_filters(j, f(**k), search_locally=False)   # noqa: E731
+
+    assert ok(plain, work_mode="onsite") and not ok(plain, work_mode="hybrid") and not ok(plain, work_mode="remote")
+    assert ok(hybrid, work_mode="hybrid") and not ok(hybrid, work_mode="onsite")
+    assert ok(remote, work_mode="remote") and not ok(remote, work_mode="onsite")
+    assert ok(plain, employment_type="full-time") and not ok(plain, employment_type="internship")
+    assert ok(intern, employment_type="internship") and not ok(intern, employment_type="full-time")
+    assert ok(contract, employment_type="contract") and not ok(contract, employment_type="full-time")
+
+
 # -------------------------------------------------------------------- matching
 
 def test_match_scores():
@@ -245,7 +263,8 @@ async def test_service_end_to_end_with_isolation_and_match():
     res = await service.search_jobs(SearchFilters(q="python"), prof, sources=srcs)
     titles = [j.title for j, _ in res.jobs]
     assert "Chef" not in titles                                              # irrelevant ATS job filtered locally
-    assert [j.source for j, _ in res.jobs] == ["greenhouse", "lever", "indeed"]     # tier order
+    # title relevance first (Python in the title), then source tier; description-only mention last
+    assert [j.source for j, _ in res.jobs] == ["lever", "indeed", "greenhouse"]
     st = {s.name: s for s in res.sources}
     assert st["jsearch"].status == "error" and st["adzuna"].status == "skipped" and st["lever"].status == "ok"
     assert res.profile_used and all(m is not None for _, m in res.jobs)

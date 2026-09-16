@@ -117,24 +117,10 @@ def title_tokens(text: str | None) -> list[str]:
 
 
 def query_matches_job(query: str, title: str, description: str) -> bool:
-    """Loose relevance test for sources that cannot search server-side (ATS boards).
+    """Kept for backwards compatibility; the rules live in app.jobsearch.relevance."""
+    from app.jobsearch.relevance import query_matches_job as _impl
 
-    - every query word in the title                       -> match
-    - otherwise a multi-word query needs at least one word in the title, and every word
-      not in the title must be mentioned 2+ times in the description (a real requirement,
-      not a passing mention).
-    """
-    qt = title_tokens(query)
-    if not qt:
-        return True
-    tt = set(title_tokens(title))
-    missing = [t for t in qt if t not in tt]
-    if not missing:
-        return True
-    if len(qt) >= 2 and len(missing) == len(qt):
-        return False
-    desc = (description or "").lower()[:4000]
-    return all(desc.count(t) >= 2 for t in missing)
+    return _impl(query, title, description)
 
 
 # --------------------------------------------------------------------- skills

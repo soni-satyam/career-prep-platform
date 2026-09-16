@@ -152,7 +152,7 @@ async def search_jobs(
             matches[j.uid] = score_job(j, profile)
     match_of = lambda j: (matches.get(j.uid).score if matches.get(j.uid) else -1)  # noqa: E731
 
-    ordered = sort_jobs(deduped, f.sort, match_of)[: s.job_max_results]
+    ordered = sort_jobs(deduped, f.sort, match_of, query=f.q)[: s.job_max_results]
     facets: dict[str, int] = {}
     for j in ordered:
         facets[j.source] = facets.get(j.source, 0) + 1
