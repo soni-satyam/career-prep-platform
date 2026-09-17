@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { prepApi } from '../lib/api'
-import AtsMatchMeter from '../components/AtsMatchMeter'
-import ResumeExport from '../components/ResumeExport'
+import ReadinessPanel from '../components/ReadinessPanel'
+import ResumeWorkspace from '../components/ResumeWorkspace'
 
 export default function SessionDetail() {
   const { id } = useParams()
@@ -41,7 +41,7 @@ export default function SessionDetail() {
   const tips = plan.resume_tips || []
 
   return (
-    <div className="p-8 max-w-4xl space-y-6">
+    <div className="p-4 sm:p-8 max-w-6xl space-y-6">
       <div>
         <Link to="/progress" className="text-sm text-zinc-400 hover:text-white">
           ← All sessions
@@ -52,29 +52,11 @@ export default function SessionDetail() {
         </p>
       </div>
 
-      {plan.ats_match && <AtsMatchMeter match={plan.ats_match} />}
-      {tailored && <ResumeExport sessionId={session.id} />}
-
-      {gaps && (
-        <section className="bg-[#111113] border border-zinc-800 rounded-xl p-5">
-          <h2 className="font-medium mb-3">Gap analysis</h2>
-          <div className="text-xs text-zinc-500 mb-2">
-            Readiness: <span className="text-zinc-300">{gaps.overall_readiness}</span>
-          </div>
-          {gaps.strengths?.length > 0 && (
-            <ul className="text-sm text-zinc-300 list-disc list-inside mb-3">
-              {gaps.strengths.map((s: string, i: number) => (
-                <li key={i}>{s}</li>
-              ))}
-            </ul>
-          )}
-          {gaps.gaps?.map((g: any) => (
-            <div key={g.id} className="text-sm border-l-2 border-amber-500/50 pl-3 mb-2">
-              <div className="text-zinc-300">{g.description}</div>
-              {g.how_to_close && <div className="text-xs text-zinc-500">{g.how_to_close}</div>}
-            </div>
-          ))}
-        </section>
+      {tailored ? (
+        // match meters, readiness, editor + live preview, approve & download
+        <ResumeWorkspace key={session.id} session={session} />
+      ) : (
+        gaps && <ReadinessPanel readiness={plan.readiness ?? null} analysis={gaps} />
       )}
 
       {weeks.length > 0 && (
@@ -94,28 +76,6 @@ export default function SessionDetail() {
               </div>
             ))}
           </div>
-        </section>
-      )}
-
-      {tailored && (
-        <section className="bg-[#111113] border border-zinc-800 rounded-xl p-5">
-          <h2 className="font-medium mb-3">Tailored resume</h2>
-          {tailored.summary && <p className="text-sm text-zinc-300 mb-3">{tailored.summary}</p>}
-          {tailored.skills?.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-3">
-              {tailored.skills.map((s: string, i: number) => (
-                <span key={i} className="text-xs bg-zinc-800 px-2 py-1 rounded">
-                  {s}
-                </span>
-              ))}
-            </div>
-          )}
-          {tailored.experience?.map((e: any) => (
-            <div key={e.id} className="mb-3">
-              <div className="text-sm font-medium">{e.title}</div>
-              <div className="text-sm text-zinc-400 whitespace-pre-wrap">{e.content}</div>
-            </div>
-          ))}
         </section>
       )}
 

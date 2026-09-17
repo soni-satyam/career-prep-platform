@@ -85,49 +85,6 @@ function toParams(f: Filters, page: number): JobSearchParams {
   }
 }
 
-const WORK_MODE_LABEL: Record<string, string> = { remote: 'Remote', hybrid: 'Hybrid', onsite: 'On-site' }
-const TYPE_LABEL: Record<string, string> = {
-  'full-time': 'Full-time',
-  'part-time': 'Part-time',
-  contract: 'Contract',
-  internship: 'Internship',
-}
-const POSTED_LABEL: Record<string, string> = {
-  '1': 'Last 24 hours',
-  '3': 'Last 3 days',
-  '7': 'Last week',
-  '14': 'Last 2 weeks',
-  '30': 'Last month',
-}
-
-// One chip per filter that is actually applied to the current results.
-function activeChips(f: Filters): Array<{ key: string; label: string; clear: Partial<Filters> }> {
-  const chips: Array<{ key: string; label: string; clear: Partial<Filters> }> = []
-  if (f.work_mode) chips.push({ key: 'work_mode', label: WORK_MODE_LABEL[f.work_mode] ?? f.work_mode, clear: { work_mode: '' } })
-  if (f.employment_type)
-    chips.push({ key: 'type', label: TYPE_LABEL[f.employment_type] ?? f.employment_type, clear: { employment_type: '' } })
-  if (f.posted) chips.push({ key: 'posted', label: POSTED_LABEL[f.posted] ?? `Last ${f.posted} days`, clear: { posted: '' } })
-  if (f.salary.trim() && parseFloat(f.salary) > 0)
-    chips.push({
-      key: 'salary',
-      label: `Salary ≥ ${f.salary}${f.currency === 'INR' ? 'L' : 'k'} ${f.currency}${f.includeNoSalary ? '' : ' (listed only)'}`,
-      clear: { salary: '' },
-    })
-  if (f.expMin.trim() || f.expMax.trim())
-    chips.push({
-      key: 'exp',
-      label: `Exp ${f.expMin.trim() || '0'}–${f.expMax.trim() || '∞'} yrs`,
-      clear: { expMin: '', expMax: '' },
-    })
-  if (f.sources.length)
-    chips.push({
-      key: 'sources',
-      label: f.sources.map((k) => SOURCES.find((x) => x.key === k)?.label ?? k).join(', '),
-      clear: { sources: [] },
-    })
-  return chips
-}
-
 function timeAgo(iso: string | null): string {
   if (!iso) return 'Date not listed'
   const diff = Date.now() - new Date(iso).getTime()
@@ -440,6 +397,44 @@ function ResumePanel({
   )
 }
 
+const WORK_MODES: Array<[string, string]> = [['', 'Any'], ['remote', 'Remote'], ['hybrid', 'Hybrid'], ['onsite', 'On-site']]
+const JOB_TYPES: Array<[string, string]> = [
+  ['', 'Any'], ['full-time', 'Full-time'], ['part-time', 'Part-time'], ['contract', 'Contract'], ['internship', 'Internship'],
+]
+const POSTED: Array<[string, string]> = [
+  ['', 'Any time'], ['1', '24 hours'], ['3', '3 days'], ['7', 'Week'], ['14', '2 weeks'], ['30', 'Month'],
+]
+const labelOf = (opts: Array<[string, string]>, v: string) => opts.find(([k]) => k === v)?.[1] ?? v
+
+function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`px-3 py-1.5 rounded-full text-xs border transition ${
+        active
+          ? 'bg-white text-black border-white font-medium'
+          : 'border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function FilterSection({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="py-4 border-b border-zinc-800 last:border-b-0">
+      <div className="flex items-baseline justify-between mb-2.5">
+        <h3 className="text-xs font-medium uppercase tracking-wide text-zinc-400">{title}</h3>
+        {hint && <span className="text-[11px] text-zinc-600">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
 export default function Jobs() {
   const [hasSearched, setHasSearched] = useState(false)
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
@@ -447,7 +442,6 @@ export default function Jobs() {
   const [jobs, setJobs] = useState<JobResult[]>([])
   const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(false)
-  const [refreshing, setRefreshing] = useState(false) // a fresh search (not "Load more") is in flight
   const [error, setError] = useState('')
   const [profile, setProfile] = useState<CandidateProfile | null>(null)
   const [profileLoaded, setProfileLoaded] = useState(false) // first search waits for this, so it runs once
@@ -470,7 +464,6 @@ export default function Jobs() {
     const ctl = new AbortController()
     abortRef.current = ctl
     setLoading(true)
-    setRefreshing(!append)
     setError('')
     try {
       const res = await jobsApi.search(toParams(f, pg), ctl.signal)
@@ -482,10 +475,7 @@ export default function Jobs() {
       setError(e instanceof Error ? e.message : 'Search failed')
       if (!append) setJobs([])
     } finally {
-      if (!ctl.signal.aborted) {
-        setLoading(false)
-        setRefreshing(false)
-      }
+      if (!ctl.signal.aborted) setLoading(false)
     }
   }, [])
 
@@ -498,28 +488,199 @@ export default function Jobs() {
   }, [committed, profileKey, profileLoaded, hasSearched, run])
 
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setFilters((f) => ({ ...f, [k]: v }))
-  const apply = (next?: Partial<Filters>) => {
-    setCommitted({ ...filters, ...next })
+  // Commit filters and search. `patch` is applied to the panel too, so what you see always matches what ran.
+  const apply = (patch: Partial<Filters> = {}) => {
+    const next = { ...filters, ...patch }
+    setFilters(next)
+    setCommitted(next)
     setHasSearched(true)
   }
   const hasProfile = !!profile?.has_profile
 
-  const toggleSource = (key: string) => {
-    const sources = filters.sources.includes(key) ? filters.sources.filter((s) => s !== key) : [...filters.sources, key]
-    setFilters((f) => ({ ...f, sources }))
-  }
-
   const problems = useMemo(() => (data?.sources ?? []).filter((s) => s.status !== 'ok'), [data])
-  const chips = useMemo(() => activeChips(committed), [committed])
+  const dirty = JSON.stringify(filters) !== JSON.stringify(committed)
+
+  // What is actually applied right now, as removable chips.
+  const chips: Array<{ key: string; label: string; clear: Partial<Filters> }> = []
+  if (committed.work_mode) chips.push({ key: 'wm', label: labelOf(WORK_MODES, committed.work_mode), clear: { work_mode: '' } })
+  if (committed.employment_type)
+    chips.push({ key: 'et', label: labelOf(JOB_TYPES, committed.employment_type), clear: { employment_type: '' } })
+  if (committed.posted) chips.push({ key: 'po', label: `Posted: ${labelOf(POSTED, committed.posted)}`, clear: { posted: '' } })
+  if (committed.salary)
+    chips.push({
+      key: 'sa',
+      label: `Salary ≥ ${committed.salary}${committed.currency === 'INR' ? 'L' : 'k'} ${committed.currency}`,
+      clear: { salary: '' },
+    })
+  if (committed.expMin || committed.expMax)
+    chips.push({ key: 'ex', label: `${committed.expMin || 0}–${committed.expMax || '∞'} yrs exp`, clear: { expMin: '', expMax: '' } })
+  committed.sources.forEach((src) =>
+    chips.push({
+      key: `s_${src}`,
+      label: SOURCES.find((x) => x.key === src)?.label ?? src,
+      clear: { sources: committed.sources.filter((x) => x !== src) },
+    })
+  )
   const activeFilterCount = chips.length
-  const removeChip = (clear: Partial<Filters>) => {
-    setFilters((f) => ({ ...f, ...clear }))
-    setCommitted((c) => ({ ...c, ...clear }))
-    setHasSearched(true)
-  }
+
+  const resetFilters = () => apply({ ...DEFAULT_FILTERS, q: filters.q, location: filters.location })
+
+  const filterPanel = (
+    <aside
+      aria-label="Filters"
+      className="bg-[#111113] border border-zinc-800 rounded-xl lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto"
+    >
+      <div className="flex items-center justify-between px-4 pt-4">
+        <h2 className="font-medium">
+          Filters
+          {activeFilterCount > 0 && (
+            <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded-full bg-white text-black align-middle">{activeFilterCount}</span>
+          )}
+        </h2>
+        <button
+          type="button"
+          onClick={resetFilters}
+          disabled={activeFilterCount === 0 && !dirty}
+          className="text-xs text-zinc-400 underline disabled:opacity-40 disabled:no-underline"
+        >
+          Clear all
+        </button>
+      </div>
+
+      <div className="px-4">
+        <FilterSection title="Work mode">
+          <div className="flex flex-wrap gap-1.5">
+            {WORK_MODES.map(([v, l]) => (
+              <Pill key={v} active={filters.work_mode === v} onClick={() => apply({ work_mode: v })}>
+                {l}
+              </Pill>
+            ))}
+          </div>
+        </FilterSection>
+
+        <FilterSection title="Job type">
+          <div className="flex flex-wrap gap-1.5">
+            {JOB_TYPES.map(([v, l]) => (
+              <Pill key={v} active={filters.employment_type === v} onClick={() => apply({ employment_type: v })}>
+                {l}
+              </Pill>
+            ))}
+          </div>
+        </FilterSection>
+
+        <FilterSection title="Date posted">
+          <div className="flex flex-wrap gap-1.5">
+            {POSTED.map(([v, l]) => (
+              <Pill key={v} active={filters.posted === v} onClick={() => apply({ posted: v })}>
+                {l}
+              </Pill>
+            ))}
+          </div>
+        </FilterSection>
+
+        <FilterSection title="Min salary" hint={filters.currency === 'INR' ? 'lakhs / year' : 'thousands / year'}>
+          <div className="flex gap-2">
+            <input
+              className={inputCls}
+              inputMode="decimal"
+              placeholder={filters.currency === 'INR' ? 'e.g. 15' : 'e.g. 90'}
+              value={filters.salary}
+              onChange={(e) => set('salary', e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && apply()}
+            />
+            <select
+              aria-label="Currency"
+              className="bg-[#111113] border border-zinc-800 rounded-md px-2 text-sm text-white"
+              value={filters.currency}
+              onChange={(e) => set('currency', e.target.value)}
+            >
+              {['INR', 'USD', 'EUR', 'GBP'].map((c) => (
+                <option key={c}>{c}</option>
+              ))}
+            </select>
+          </div>
+          <label className="flex items-center gap-2 mt-2 text-xs text-zinc-400">
+            <input type="checkbox" checked={filters.includeNoSalary} onChange={(e) => set('includeNoSalary', e.target.checked)} />
+            Include jobs that don’t list a salary
+          </label>
+        </FilterSection>
+
+        <FilterSection title="Experience" hint="years required">
+          <div className="flex items-center gap-2">
+            <input
+              className={inputCls}
+              inputMode="decimal"
+              placeholder="Min"
+              value={filters.expMin}
+              onChange={(e) => set('expMin', e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && apply()}
+            />
+            <span className="text-zinc-600">–</span>
+            <input
+              className={inputCls}
+              inputMode="decimal"
+              placeholder="Max"
+              value={filters.expMax}
+              onChange={(e) => set('expMax', e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && apply()}
+            />
+          </div>
+          {profile?.experience_years != null && (
+            <button
+              type="button"
+              className="text-xs text-zinc-400 underline mt-2"
+              onClick={() => {
+                const y = Math.round(profile.experience_years as number)
+                set('expMin', String(Math.max(0, y - 1)))
+                set('expMax', String(y + 2))
+              }}
+            >
+              Use my experience ({profile.experience_years} yrs)
+            </button>
+          )}
+        </FilterSection>
+
+        <FilterSection title="Sources" hint={filters.sources.length ? `${filters.sources.length} selected` : 'all sources'}>
+          <div className="space-y-1.5">
+            {SOURCES.map((s) => (
+              <label key={s.key} className="flex items-center gap-2 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={filters.sources.includes(s.key)}
+                  onChange={() =>
+                    apply({
+                      sources: filters.sources.includes(s.key)
+                        ? filters.sources.filter((x) => x !== s.key)
+                        : [...filters.sources, s.key],
+                    })
+                  }
+                />
+                <span className="flex-1">{s.label}</span>
+                {data?.facets[s.key] != null && <span className="text-xs text-zinc-600 tabular-nums">{data.facets[s.key]}</span>}
+              </label>
+            ))}
+          </div>
+        </FilterSection>
+      </div>
+
+      <div className="sticky bottom-0 bg-[#111113] border-t border-zinc-800 rounded-b-xl p-4">
+        <button
+          type="button"
+          onClick={() => apply()}
+          disabled={loading}
+          className="w-full bg-white text-black text-sm font-medium py-2 rounded-md disabled:opacity-60"
+        >
+          {loading ? 'Searching…' : dirty ? 'Apply changes' : 'Apply filters'}
+        </button>
+        <p className="text-[11px] text-zinc-600 mt-2 text-center">
+          {dirty ? 'You have changes that are not applied yet.' : 'Buttons and checkboxes apply instantly. Press Enter in number fields.'}
+        </p>
+      </div>
+    </aside>
+  )
 
   return (
-    <div className="p-4 sm:p-8 max-w-5xl">
+    <div className="p-4 sm:p-8 max-w-7xl">
       <h1 className="text-2xl font-semibold mb-1">Search Jobs</h1>
       <p className="text-zinc-400 mb-6">
         Listings from company career pages, Greenhouse, Lever and job portals, newest first within each source.
@@ -528,7 +689,7 @@ export default function Jobs() {
       <ResumePanel profile={profile} onChange={setProfile} />
 
       <form
-        className="grid gap-2 sm:grid-cols-[1fr_220px_auto] mb-3"
+        className="grid gap-2 sm:grid-cols-[1fr_220px_auto] mb-5"
         onSubmit={(e) => {
           e.preventDefault()
           apply()
@@ -551,235 +712,116 @@ export default function Jobs() {
         </button>
       </form>
 
-      <div className="flex items-center gap-3 mb-4 text-sm">
-        <button
-          type="button"
-          onClick={() => setShowFilters((s) => !s)}
-          className="border border-zinc-700 rounded-md px-3 py-1.5 hover:border-zinc-500"
-        >
-          Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}
-        </button>
-        <label className="flex items-center gap-2 text-zinc-400">
-          Sort
-          <select
-            value={filters.sort}
-            onChange={(e) => {
-              set('sort', e.target.value)
-              apply({ sort: e.target.value })
-            }}
-            className="bg-[#111113] border border-zinc-800 rounded-md px-2 py-1.5 text-sm text-white"
-          >
-            <option value="priority">Source priority, then newest</option>
-            <option value="recent">Most recent</option>
-            <option value="match" disabled={!hasProfile}>
-              Best match{hasProfile ? '' : ' (upload resume)'}
-            </option>
-          </select>
-        </label>
-      </div>
-
-      {showFilters && (
-        <div className="bg-[#111113] border border-zinc-800 rounded-xl p-4 mb-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3 text-sm">
-          <label className="block">
-            <span className="block text-zinc-400 mb-1">Work mode</span>
-            <select className={inputCls} value={filters.work_mode} onChange={(e) => set('work_mode', e.target.value)}>
-              <option value="">Any</option>
-              <option value="remote">Remote</option>
-              <option value="hybrid">Hybrid</option>
-              <option value="onsite">On-site</option>
-            </select>
-          </label>
-
-          <div>
-            <span className="block text-zinc-400 mb-1">
-              Min salary ({filters.currency === 'INR' ? 'lakhs per year' : 'thousands per year'})
-            </span>
-            <div className="flex gap-2">
-              <input
-                className={inputCls}
-                inputMode="decimal"
-                placeholder={filters.currency === 'INR' ? 'e.g. 15' : 'e.g. 90'}
-                value={filters.salary}
-                onChange={(e) => set('salary', e.target.value)}
-              />
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
+        {/* ---------------- results ---------------- */}
+        <div className="min-w-0">
+          <div className="flex items-center gap-3 mb-3 text-sm flex-wrap">
+            <button
+              type="button"
+              onClick={() => setShowFilters((v) => !v)}
+              className="lg:hidden border border-zinc-700 rounded-md px-3 py-1.5 hover:border-zinc-500"
+            >
+              {showFilters ? 'Hide filters' : `Filters${activeFilterCount ? ` (${activeFilterCount})` : ''}`}
+            </button>
+            <label className="flex items-center gap-2 text-zinc-400">
+              Sort
               <select
-                className="bg-[#111113] border border-zinc-800 rounded-md px-2 text-sm text-white"
-                value={filters.currency}
-                onChange={(e) => set('currency', e.target.value)}
+                value={filters.sort}
+                onChange={(e) => apply({ sort: e.target.value })}
+                className="bg-[#111113] border border-zinc-800 rounded-md px-2 py-1.5 text-sm text-white"
               >
-                {['INR', 'USD', 'EUR', 'GBP'].map((c) => (
-                  <option key={c}>{c}</option>
-                ))}
+                <option value="priority">Source priority, then newest</option>
+                <option value="recent">Most recent</option>
+                <option value="match" disabled={!hasProfile}>
+                  Best match{hasProfile ? '' : ' (upload resume)'}
+                </option>
               </select>
-            </div>
-            <label className="flex items-center gap-2 mt-2 text-xs text-zinc-400">
-              <input
-                type="checkbox"
-                checked={filters.includeNoSalary}
-                onChange={(e) => set('includeNoSalary', e.target.checked)}
-              />
-              Include jobs that don’t list a salary
             </label>
           </div>
 
-          <div>
-            <span className="block text-zinc-400 mb-1">Experience required (years)</span>
-            <div className="flex items-center gap-2">
-              <input className={inputCls} inputMode="decimal" placeholder="Min" value={filters.expMin} onChange={(e) => set('expMin', e.target.value)} />
-              <span className="text-zinc-600">–</span>
-              <input className={inputCls} inputMode="decimal" placeholder="Max" value={filters.expMax} onChange={(e) => set('expMax', e.target.value)} />
-            </div>
-            {profile?.experience_years != null && (
-              <button
-                type="button"
-                className="text-xs text-zinc-400 underline mt-1"
-                onClick={() => {
-                  const y = Math.round(profile.experience_years as number)
-                  setFilters((f) => ({ ...f, expMin: String(Math.max(0, y - 1)), expMax: String(y + 2) }))
-                }}
-              >
-                Use my experience ({profile.experience_years} yrs)
+          {showFilters && <div className="lg:hidden mb-4">{filterPanel}</div>}
+
+          {chips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              {chips.map((c) => (
+                <span
+                  key={c.key}
+                  className="inline-flex items-center gap-1.5 text-xs bg-zinc-800 text-zinc-200 rounded-full pl-3 pr-1.5 py-1"
+                >
+                  {c.label}
+                  <button
+                    type="button"
+                    onClick={() => apply(c.clear)}
+                    aria-label={`Remove filter ${c.label}`}
+                    className="w-4 h-4 rounded-full flex items-center justify-center text-zinc-400 hover:bg-zinc-700 hover:text-white"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button type="button" onClick={resetFilters} className="text-xs text-zinc-500 underline">
+                Clear all
               </button>
+            </div>
+          )}
+
+          {error && <div className="text-sm text-red-400 mb-3">{error}</div>}
+
+          {data && (
+            <div className="flex items-center justify-between text-xs text-zinc-500 mb-3 gap-3 flex-wrap">
+              <span>
+                {loading ? 'Updating results…' : `${data.total} job${data.total === 1 ? '' : 's'} found`}
+                {!data.profile_used && ' · upload a resume to see match %'}
+              </span>
+              {problems.length > 0 && (
+                <button type="button" className="underline" onClick={() => setShowSources((s) => !s)}>
+                  {problems.length} source{problems.length === 1 ? '' : 's'} not included
+                </button>
+              )}
+            </div>
+          )}
+
+          {showSources && problems.length > 0 && (
+            <ul className="text-xs text-zinc-400 bg-[#111113] border border-zinc-800 rounded-lg p-3 mb-4 space-y-1">
+              {problems.map((s) => (
+                <li key={s.name}>
+                  <span className="text-zinc-200">{s.name}</span> — {s.status === 'skipped' ? 'not set up: ' : 'failed: '}
+                  {s.message}
+                </li>
+              ))}
+            </ul>
+          )}
+
+          {!hasSearched && !data && (
+            <p className="text-sm text-zinc-500">Search for a role, or pick filters on the right to start.</p>
+          )}
+          {loading && jobs.length === 0 && <p className="text-sm text-zinc-500">Searching all sources…</p>}
+
+          <div className={`space-y-3 transition-opacity ${loading && jobs.length > 0 ? 'opacity-40 pointer-events-none' : ''}`}>
+            {jobs.map((j) => (
+              <JobCard key={j.id} job={j} />
+            ))}
+            {!loading && data && jobs.length === 0 && (
+              <p className="text-sm text-zinc-500">No jobs match these filters. Try a broader role or fewer filters.</p>
             )}
           </div>
 
-          <label className="block">
-            <span className="block text-zinc-400 mb-1">Job type</span>
-            <select
-              className={inputCls}
-              value={filters.employment_type}
-              onChange={(e) => set('employment_type', e.target.value)}
-            >
-              <option value="">Any</option>
-              <option value="full-time">Full-time</option>
-              <option value="part-time">Part-time</option>
-              <option value="contract">Contract</option>
-              <option value="internship">Internship</option>
-            </select>
-          </label>
-
-          <label className="block">
-            <span className="block text-zinc-400 mb-1">Posted</span>
-            <select className={inputCls} value={filters.posted} onChange={(e) => set('posted', e.target.value)}>
-              <option value="">Any time</option>
-              <option value="1">Last 24 hours</option>
-              <option value="3">Last 3 days</option>
-              <option value="7">Last week</option>
-              <option value="14">Last 2 weeks</option>
-              <option value="30">Last month</option>
-            </select>
-          </label>
-
-          <div className="sm:col-span-2 lg:col-span-3">
-            <span className="block text-zinc-400 mb-1">Sources</span>
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
-              {SOURCES.map((s) => (
-                <label key={s.key} className="flex items-center gap-1.5 text-zinc-300">
-                  <input type="checkbox" checked={filters.sources.includes(s.key)} onChange={() => toggleSource(s.key)} />
-                  {s.label}
-                  {data?.facets[s.key] != null && <span className="text-zinc-600">({data.facets[s.key]})</span>}
-                </label>
-              ))}
-              <span className="text-xs text-zinc-600">none selected = all sources</span>
-            </div>
-          </div>
-
-          <div className="sm:col-span-2 lg:col-span-3 flex gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                apply()
-                setShowFilters(false)
-              }}
-              className="bg-white text-black text-sm font-medium px-4 py-2 rounded-md"
-            >
-              Apply filters
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const reset = { ...DEFAULT_FILTERS, q: filters.q, location: filters.location }
-                setFilters(reset)
-                setCommitted(reset)
-              }}
-              className="text-sm border border-zinc-700 rounded-md px-4 py-2"
-            >
-              Reset
-            </button>
-          </div>
-        </div>
-      )}
-
-      {chips.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 mb-3">
-          {chips.map((c) => (
-            <span
-              key={c.key}
-              className="inline-flex items-center gap-1.5 text-xs bg-zinc-800 border border-zinc-700 rounded-full pl-2.5 pr-1.5 py-1 text-zinc-200"
-            >
-              {c.label}
+          {data?.has_more && (
+            <div className="mt-5">
               <button
-                type="button"
-                aria-label={`Remove filter ${c.label}`}
-                onClick={() => removeChip(c.clear)}
-                className="text-zinc-400 hover:text-white leading-none px-1"
+                onClick={() => run(committed, page + 1, true)}
+                disabled={loading}
+                className="border border-zinc-700 rounded-md px-4 py-2 text-sm hover:border-zinc-500 disabled:opacity-50"
               >
-                ×
+                {loading ? 'Loading…' : 'Load more'}
               </button>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {error && <div className="text-sm text-red-400 mb-3">{error}</div>}
-
-      {data && (
-        <div className="flex items-center justify-between text-xs text-zinc-500 mb-3 gap-3 flex-wrap">
-          <span>
-            {refreshing ? 'Updating results…' : `${data.total} job${data.total === 1 ? '' : 's'} found`}
-            {!data.profile_used && ' · upload a resume to see match %'}
-          </span>
-          {problems.length > 0 && (
-            <button type="button" className="underline" onClick={() => setShowSources((s) => !s)}>
-              {problems.length} source{problems.length === 1 ? '' : 's'} not included
-            </button>
+            </div>
           )}
         </div>
-      )}
 
-      {showSources && problems.length > 0 && (
-        <ul className="text-xs text-zinc-400 bg-[#111113] border border-zinc-800 rounded-lg p-3 mb-4 space-y-1">
-          {problems.map((s) => (
-            <li key={s.name}>
-              <span className="text-zinc-200">{s.name}</span> — {s.status === 'skipped' ? 'not set up: ' : 'failed: '}
-              {s.message}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {loading && jobs.length === 0 && <p className="text-sm text-zinc-500">Searching all sources…</p>}
-
-      <div className={`space-y-3 transition-opacity ${refreshing && jobs.length > 0 ? 'opacity-40 pointer-events-none' : ''}`}>
-        {jobs.map((j) => (
-          <JobCard key={j.id} job={j} />
-        ))}
-        {!loading && data && jobs.length === 0 && (
-          <p className="text-sm text-zinc-500">No jobs match these filters. Try a broader role or fewer filters.</p>
-        )}
+        {/* ---------------- filters (right side on desktop) ---------------- */}
+        <div className="hidden lg:block">{filterPanel}</div>
       </div>
-
-      {data?.has_more && (
-        <div className="mt-5">
-          <button
-            onClick={() => run(committed, page + 1, true)}
-            disabled={loading}
-            className="border border-zinc-700 rounded-md px-4 py-2 text-sm hover:border-zinc-500 disabled:opacity-50"
-          >
-            {loading ? 'Loading…' : 'Load more'}
-          </button>
-        </div>
-      )}
     </div>
   )
 }

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
 from reportlab.lib.pagesizes import A4, LETTER
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
@@ -38,22 +38,30 @@ class Template:
     leading: float
     margin_mm: float
     section_gap: float
-    rule: bool
+    rule: bool                 # thin black line under each section heading
+    align: str = "left"        # name + contact line: "left" | "center"
+    accent: str = "#000000"    # colour of the name and section headings (body text is always black)
+    head_bar: bool = False     # shaded bar behind section headings instead of a line
+    bar_color: str = "#EEF1F5"
 
 
+# All three are ATS-safe: single column, real text, standard headings. They differ in look only.
 TEMPLATES: dict[str, Template] = {
     "ats_classic": Template(
-        "ats_classic", "ATS Classic",
-        "Single column, Helvetica, clear section rules. The safest choice for almost every ATS.",
-        "Helvetica", "Helvetica-Bold", 10, 20, 10.5, 13.2, 18, 10, True),
+        key="ats_classic", label="ATS Classic",
+        description="Helvetica, black, left-aligned with a rule under each heading. The safest choice for almost every ATS.",
+        font="Helvetica", bold="Helvetica-Bold", body=10, name_size=20, head_size=10.5, leading=13.2,
+        margin_mm=18, section_gap=10, rule=True),
     "ats_compact": Template(
-        "ats_compact", "ATS Compact",
-        "Same ATS-safe structure with tighter spacing, to fit more on one page.",
-        "Helvetica", "Helvetica-Bold", 9.2, 17, 9.5, 11.6, 14, 6, True),
+        key="ats_compact", label="ATS Compact",
+        description="Dense layout with navy name and shaded section bars. Fits the most on one page.",
+        font="Helvetica", bold="Helvetica-Bold", body=9.2, name_size=18, head_size=9.5, leading=11.6,
+        margin_mm=14, section_gap=7, rule=False, accent="#1F3A5F", head_bar=True),
     "ats_serif": Template(
-        "ats_serif", "ATS Serif",
-        "Single column in Times; a traditional look that parses just as cleanly.",
-        "Times-Roman", "Times-Bold", 10.5, 20, 11, 13.2, 18, 10, True),
+        key="ats_serif", label="ATS Serif",
+        description="Traditional Times look with a centered name and contact line. Formal and spacious.",
+        font="Times-Roman", bold="Times-Bold", body=10.5, name_size=22, head_size=11, leading=13.6,
+        margin_mm=20, section_gap=11, rule=True, align="center"),
 }
 DEFAULT_TEMPLATE = "ats_classic"
 
@@ -88,13 +96,20 @@ def _esc(s: Any) -> str:
 
 def _styles(t: Template) -> dict[str, ParagraphStyle]:
     black = colors.black
+    accent = colors.HexColor(t.accent)
+    al = TA_CENTER if t.align == "center" else TA_LEFT
+    head = dict(fontName=t.bold, fontSize=t.head_size, leading=t.head_size * 1.25, textColor=accent,
+                spaceBefore=t.section_gap, spaceAfter=2)
+    if t.head_bar:
+        # shaded bar spanning exactly the text width; the heading is still ordinary text
+        head.update(backColor=colors.HexColor(t.bar_color), borderPadding=(2, 3, 2, 3), leftIndent=3, rightIndent=3,
+                    spaceBefore=t.section_gap + 3, spaceAfter=5)
     return {
         "name": ParagraphStyle("name", fontName=t.bold, fontSize=t.name_size, leading=t.name_size * 1.2,
-                               textColor=black, alignment=TA_LEFT, spaceAfter=2),
+                               textColor=accent, alignment=al, spaceAfter=2),
         "contact": ParagraphStyle("contact", fontName=t.font, fontSize=t.body - 0.5, leading=t.leading,
-                                  textColor=colors.HexColor("#333333"), spaceAfter=2),
-        "head": ParagraphStyle("head", fontName=t.bold, fontSize=t.head_size, leading=t.head_size * 1.25,
-                               textColor=black, spaceBefore=t.section_gap, spaceAfter=2),
+                                  textColor=colors.HexColor("#333333"), alignment=al, spaceAfter=2),
+        "head": ParagraphStyle("head", **head),
         "title": ParagraphStyle("title", fontName=t.bold, fontSize=t.body + 0.5, leading=t.leading,
                                 textColor=black, spaceBefore=4),
         "sub": ParagraphStyle("sub", fontName=t.font, fontSize=t.body - 0.5, leading=t.leading,
@@ -121,7 +136,7 @@ def _section(heading: str, items: list, st: dict[str, ParagraphStyle], t: Templa
     if not items:
         return []
     head: list = [Paragraph(_esc(heading.upper()), st["head"])]
-    if t.rule:
+    if t.rule and not t.head_bar:
         head.append(HRFlowable(width="100%", thickness=0.6, color=colors.black, spaceBefore=0, spaceAfter=3))
     return head + items
 

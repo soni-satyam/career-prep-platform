@@ -1,8 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { prepApi, type AtsMatch } from '../lib/api'
-import AtsMatchMeter from '../components/AtsMatchMeter'
-import ResumeExport from '../components/ResumeExport'
+import { prepApi } from '../lib/api'
+import ResumeWorkspace from '../components/ResumeWorkspace'
 
 export default function ResumeTailor() {
   const [resumeText, setResumeText] = useState('')
@@ -13,6 +12,9 @@ export default function ResumeTailor() {
   const [result, setResult] = useState<any>(null)
   const [step, setStep] = useState<'input' | 'result'>('input')
   const [statusMsg, setStatusMsg] = useState('')
+  const [uploadingJd, setUploadingJd] = useState(false)
+  const [resumeFile, setResumeFile] = useState('')
+  const [jdFile, setJdFile] = useState('')
 
   const onFile = async (file: File | null) => {
     if (!file) return
@@ -21,10 +23,26 @@ export default function ResumeTailor() {
     try {
       const res = await prepApi.extractText(file)
       setResumeText(res.text)
+      setResumeFile(file.name)
     } catch (e: any) {
       setError(e.message || 'Failed to read file')
     } finally {
       setUploading(false)
+    }
+  }
+
+  const onJdFile = async (file: File | null) => {
+    if (!file) return
+    setUploadingJd(true)
+    setError(null)
+    try {
+      const res = await prepApi.extractText(file)
+      setJdText(res.text)
+      setJdFile(file.name)
+    } catch (e: any) {
+      setError(e.message || 'Failed to read file')
+    } finally {
+      setUploadingJd(false)
     }
   }
 
@@ -35,7 +53,7 @@ export default function ResumeTailor() {
     }
     setError(null)
     setLoading(true)
-    setStatusMsg('Running multi-agent pipeline (JD → profile → gaps → resume → tips)…')
+    setStatusMsg('Reading both documents, analyzing the job, comparing it with your experience and writing your tailored resume… this can take a minute.')
     try {
       const session = await prepApi.createSession({
         jd_text: jdText,
@@ -53,12 +71,10 @@ export default function ResumeTailor() {
   }
 
   const tailored = result?.tailored_resume
-  const gaps = result?.gap_analysis
   const tips = result?.plan?.resume_tips || []
-  const atsMatch: AtsMatch | null = result?.plan?.ats_match ?? null
 
   return (
-    <div className="p-8 max-w-5xl">
+    <div className="p-4 sm:p-8 max-w-6xl">
       <h1 className="text-2xl font-semibold mb-1">Tailor Your Resume</h1>
       <p className="text-zinc-400 mb-8">
         Upload or paste your resume and a job description to get a tailored version, gap analysis, and tips.
@@ -76,7 +92,7 @@ export default function ResumeTailor() {
             <label className="block text-sm text-zinc-400 mb-2">1. Your resume</label>
             <div className="mb-2">
               <label className="inline-flex items-center gap-2 text-xs text-zinc-400 border border-zinc-700 rounded-md px-3 py-1.5 cursor-pointer hover:border-zinc-500">
-                {uploading ? 'Extracting…' : 'Upload PDF / DOCX / TXT'}
+                {uploading ? 'Extracting…' : 'Upload resume (PDF / DOCX / TXT)'}
                 <input
                   type="file"
                   accept=".pdf,.docx,.txt,application/pdf"
@@ -85,6 +101,7 @@ export default function ResumeTailor() {
                   onChange={(e) => onFile(e.target.files?.[0] || null)}
                 />
               </label>
+              {resumeFile && <span className="text-xs text-zinc-500 ml-3">{resumeFile} · {resumeText.length.toLocaleString()} characters read</span>}
             </div>
             <textarea
               value={resumeText}
@@ -96,11 +113,24 @@ export default function ResumeTailor() {
           </div>
           <div>
             <label className="block text-sm text-zinc-400 mb-2">2. Job description</label>
+            <div className="mb-2">
+              <label className="inline-flex items-center gap-2 text-xs text-zinc-400 border border-zinc-700 rounded-md px-3 py-1.5 cursor-pointer hover:border-zinc-500">
+                {uploadingJd ? 'Extracting…' : 'Upload job description (PDF / DOCX / TXT)'}
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.txt,application/pdf"
+                  className="hidden"
+                  disabled={uploadingJd}
+                  onChange={(e) => onJdFile(e.target.files?.[0] || null)}
+                />
+              </label>
+              {jdFile && <span className="text-xs text-zinc-500 ml-3">{jdFile} · {jdText.length.toLocaleString()} characters read</span>}
+            </div>
             <textarea
               value={jdText}
               onChange={(e) => setJdText(e.target.value)}
               placeholder="Paste the job description here..."
-              rows={16}
+              rows={14}
               className="w-full bg-[#111113] border border-zinc-800 rounded-xl px-4 py-3 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600 resize-y"
             />
           </div>
@@ -128,65 +158,7 @@ export default function ResumeTailor() {
             </Link>
           </div>
 
-          {atsMatch && <AtsMatchMeter match={atsMatch} />}
-
-          {tailored && <ResumeExport sessionId={result.id} />}
-
-          {gaps && (
-            <div className="bg-[#111113] border border-zinc-800 rounded-xl p-5">
-              <div className="flex items-center gap-3 mb-3">
-                <span className="text-sm font-medium">Overall readiness</span>
-                <span className="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-300">
-                  {gaps.overall_readiness}
-                </span>
-              </div>
-              {gaps.strengths?.length > 0 && (
-                <ul className="text-sm text-zinc-300 list-disc list-inside mb-3">
-                  {gaps.strengths.map((s: string, i: number) => (
-                    <li key={i}>{s}</li>
-                  ))}
-                </ul>
-              )}
-              {gaps.gaps?.map((g: any) => (
-                <div key={g.id} className="text-sm border-l-2 border-amber-500/50 pl-3 mb-2">
-                  <span className="text-zinc-300">{g.description}</span>
-                  {g.how_to_close && (
-                    <div className="text-xs text-zinc-500 mt-0.5">{g.how_to_close}</div>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {tailored && (
-            <div className="bg-[#111113] border border-zinc-800 rounded-xl p-5">
-              <h2 className="font-medium mb-4">Tailored Resume</h2>
-              {tailored.summary && (
-                <p className="text-sm text-zinc-300 mb-4 leading-relaxed">{tailored.summary}</p>
-              )}
-              {tailored.skills?.length > 0 && (
-                <div className="flex flex-wrap gap-2 mb-4">
-                  {tailored.skills.map((s: string, i: number) => (
-                    <span key={i} className="text-xs bg-zinc-800 text-zinc-300 px-2 py-1 rounded">
-                      {s}
-                    </span>
-                  ))}
-                </div>
-              )}
-              {tailored.experience?.map((exp: any) => (
-                <div key={exp.id} className="mb-4">
-                  <div className="text-sm font-medium text-white">{exp.title}</div>
-                  <div className="text-sm text-zinc-400 whitespace-pre-wrap mt-1">{exp.content}</div>
-                </div>
-              ))}
-              {tailored.projects?.map((p: any) => (
-                <div key={p.id} className="mb-4">
-                  <div className="text-sm font-medium text-white">{p.title}</div>
-                  <div className="text-sm text-zinc-400 whitespace-pre-wrap mt-1">{p.content}</div>
-                </div>
-              ))}
-            </div>
-          )}
+          {tailored && <ResumeWorkspace key={result.id} session={result} />}
 
           {tips.length > 0 && (
             <div className="bg-[#111113] border border-zinc-800 rounded-xl p-5">

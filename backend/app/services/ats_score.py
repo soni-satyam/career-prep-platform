@@ -158,6 +158,10 @@ def compare(original_text: str | None, tailored: dict[str, Any] | None,
         return None
     after = score_resume(resume_to_text(tailored), terms)
     before = score_resume(original_text, terms) if (original_text or "").strip() else None
+    return _assemble(before, after, terms)
+
+
+def _assemble(before: Optional[dict[str, Any]], after: dict[str, Any], terms: list[Term]) -> dict[str, Any]:
     gained = [t for t in after["matched"] if before and t not in set(before["matched"])]
     return {
         "before": before,
@@ -165,5 +169,30 @@ def compare(original_text: str | None, tailored: dict[str, Any] | None,
         "delta": (after["score"] - before["score"]) if before else None,
         "gained": gained,
         "still_missing": after["missing"],
+        # kept so an edited resume can be re-scored against the SAME requirements, without the JD
+        "terms": [{"label": t.label, "weight": t.weight} for t in terms],
         "method": "keyword coverage of the job description's skills and requirements",
     }
+
+
+def rescore(match: dict[str, Any], tailored: dict[str, Any]) -> dict[str, Any]:
+    """Re-score an edited tailored resume against the stored terms; the 'before' score never changes."""
+    terms = [Term(str(t["label"]), int(t["weight"])) for t in match.get("terms") or []]
+    return _assemble(match.get("before"), score_resume(resume_to_text(tailored), terms), terms)
+
+
+def unverified_skills(original_text: str | None, tailored: dict[str, Any]) -> list[str]:
+    """Skills the tailored resume lists that never appear in the candidate's original resume.
+
+    The tailoring model must not invent skills, but it can over-reach; this is the check that tells
+    the candidate exactly what to confirm (or delete) before sending the resume to a recruiter.
+    """
+    text = _norm(original_text or "")
+    if not text.strip():
+        return []
+    out = []
+    for sk in tailored.get("skills") or []:
+        sk = str(sk).strip()
+        if sk and not term_matches(text, sk):
+            out.append(sk)
+    return out

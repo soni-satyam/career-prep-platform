@@ -1,10 +1,13 @@
 """Preparation APIs — full pipeline + individual agent endpoints."""
 
+import json
 import re
+from dataclasses import asdict
+from datetime import datetime, timezone
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,7 +26,11 @@ from app.core.database import get_db
 from app.models.session import PreparationSession
 from app.models.user import User
 from app.rag.store import ingest_text
-from app.services.ats_score import compare as ats_compare
+from app.agents.contracts import TailoredResume
+from app.services.ats_score import compare as ats_compare, rescore as ats_rescore, unverified_skills
+from app.services.readiness import verdict as readiness_verdict
+from app.services.resume_validation import validate_docx, validate_pdf
+from app.services.export_resume_docx import render_resume_docx
 from app.services.export_resume import tailored_resume_to_html
 from app.services.export_resume_pdf import DEFAULT_TEMPLATE, TEMPLATES, render_resume_pdf
 from app.api.feature_guard import require_feature
@@ -83,6 +90,12 @@ class SessionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+    @field_validator("plan", mode="after")
+    @classmethod
+    def _hide_private(cls, v):
+        # original_resume_text is stored only so edits can be re-checked server-side
+        return {k: x for k, x in v.items() if k != "original_resume_text"} if isinstance(v, dict) else v
 
 
 def _llm_error(e: Exception) -> HTTPException:
@@ -188,6 +201,11 @@ async def create_session(
         )
     except Exception:
         ats_match = None  # the meter is a nice-to-have; never fail the session over it
+    try:
+        unverified = unverified_skills(body.resume_text, pipeline.get("tailored_resume") or {})
+        readiness = readiness_verdict(ats_match, pipeline.get("gap_analysis"))
+    except Exception:
+        unverified, readiness = [], None
 
     session = PreparationSession(
         user_id=current_user.id,
@@ -202,6 +220,9 @@ async def create_session(
             "resume_tips": pipeline.get("resume_tips", []),
             "meta": pipeline.get("meta"),
             "ats_match": ats_match,
+            "readiness": readiness,
+            "unverified_skills": unverified,
+            "original_resume_text": (body.resume_text or "")[:30000],
         },
         gap_analysis=pipeline.get("gap_analysis"),
         tailored_resume=pipeline.get("tailored_resume"),
@@ -290,7 +311,9 @@ async def export_session_resume_html(
 async def list_resume_templates(current_user: User = Depends(get_current_user)):
     return {
         "default": DEFAULT_TEMPLATE,
-        "templates": [{"key": t.key, "label": t.label, "description": t.description} for t in TEMPLATES.values()],
+        "templates": [
+            {"key": t.key, "label": t.label, "description": t.description, "style": asdict(t)} for t in TEMPLATES.values()
+        ],
     }
 
 
@@ -315,6 +338,116 @@ async def export_session_resume_pdf(
         content=pdf,
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{name}_Resume.pdf"'},
+    )
+
+
+
+# ---------- Edit → approve → generate & validate files ----------
+
+TemplateKey = Literal["ats_classic", "ats_compact", "ats_serif"]
+PageKey = Literal["a4", "letter"]
+
+
+async def _owned_session(db: AsyncSession, session_id: int, user: User) -> PreparationSession:
+    session = await db.get(PreparationSession, session_id)
+    if session is None or session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Not found")
+    return session
+
+
+def _resume_filename(resume: dict[str, Any], ext: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9]+", "_", str((resume.get("profile") or {}).get("name") or "Resume")).strip("_") or "Resume"
+    return f"{name}_Resume.{ext}"
+
+
+@router.patch("/sessions/{session_id}/resume")
+async def save_edited_resume(
+    session_id: int,
+    body: TailoredResume,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Save the user's edits, then re-score the match and readiness for the edited text."""
+    session = await _owned_session(db, session_id, current_user)
+    resume = body.model_dump()
+    if len(json.dumps(resume)) > 200_000 or any(len(resume[k]) > 40 for k in ("experience", "projects", "education", "awards")):
+        raise HTTPException(413, "Resume is too large")
+
+    plan = dict(session.plan or {})
+    match = plan.get("ats_match")
+    if match:
+        plan["ats_match"] = ats_rescore(match, resume)
+    plan["unverified_skills"] = unverified_skills(plan.get("original_resume_text"), resume)
+    plan["readiness"] = readiness_verdict(plan.get("ats_match"), session.gap_analysis)
+    plan.pop("resume_approval", None)  # edited after approval -> must be approved again
+    session.tailored_resume = resume
+    session.plan = plan
+    await db.flush()
+    return {
+        "tailored_resume": resume,
+        "ats_match": plan.get("ats_match"),
+        "readiness": plan.get("readiness"),
+        "unverified_skills": plan["unverified_skills"],
+    }
+
+
+@router.post("/sessions/{session_id}/resume/approve")
+async def approve_resume(
+    session_id: int,
+    template: TemplateKey = DEFAULT_TEMPLATE,
+    page: PageKey = "a4",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate the PDF and DOCX from the saved resume, validate both, and return download links.
+
+    Nothing is marked approved unless every check passes.
+    """
+    session = await _owned_session(db, session_id, current_user)
+    resume = session.tailored_resume
+    if not resume:
+        raise HTTPException(400, "No tailored resume on this session")
+
+    pdf = render_resume_pdf(resume, template=template, page=page)
+    docx_bytes = render_resume_docx(resume, template=template, page=page)
+    validation = {"pdf": validate_pdf(pdf, resume), "docx": validate_docx(docx_bytes, resume)}
+    ok = validation["pdf"]["ok"] and validation["docx"]["ok"]
+
+    base = f"/api/v1/prep/sessions/{session_id}"
+    q = f"?template={template}&page={page}"
+    files = [
+        {"format": "pdf", "label": "PDF", "filename": _resume_filename(resume, "pdf"), "url": f"{base}/export-pdf{q}",
+         "pages": validation["pdf"]["pages"], "size_kb": round(len(pdf) / 1024, 1)},
+        {"format": "docx", "label": "Word (DOCX)", "filename": _resume_filename(resume, "docx"), "url": f"{base}/export-docx{q}",
+         "pages": None, "size_kb": round(len(docx_bytes) / 1024, 1)},
+    ] if ok else []
+
+    approved_at = datetime.now(timezone.utc).isoformat()
+    if ok:
+        plan = dict(session.plan or {})
+        plan["resume_approval"] = {"approved_at": approved_at, "template": template, "page": page}
+        session.plan = plan
+        await db.flush()
+    return {"approved": ok, "approved_at": approved_at if ok else None, "template": template, "page": page,
+            "validation": validation, "files": files}
+
+
+@router.get("/sessions/{session_id}/export-docx")
+async def export_session_resume_docx(
+    session_id: int,
+    template: TemplateKey = DEFAULT_TEMPLATE,
+    page: PageKey = "a4",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await _owned_session(db, session_id, current_user)
+    resume = session.tailored_resume
+    if not resume:
+        raise HTTPException(400, "No tailored resume on this session")
+    return Response(
+        content=render_resume_docx(resume, template=template, page=page),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{_resume_filename(resume, "docx")}"'},
     )
 
 
