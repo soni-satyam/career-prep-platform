@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
@@ -25,54 +24,6 @@ def _norm_type(t: str) -> str:
         return "internship"
     return t
 
-# ---------------------------------------------------------------- inferred fields
-# Greenhouse/aggregators rarely fill employment_type / work_mode, so "unknown passes every
-# filter" made the Work mode and Job type filters look broken. Fill the gaps from the posting
-# text; only genuinely unknowable cases fall through (see passes_filters).
-
-_HYBRID_RE = re.compile(r"\bhybrid\b", re.I)
-_ONSITE_RE = re.compile(r"\bon[\s-]?site\b|\bin[\s-]office\b|\bwork from office\b|\bwfo\b", re.I)
-_REMOTE_TITLE_LOC_RE = re.compile(r"\bremote\b|\bwork from home\b|\bwfh\b|\banywhere\b", re.I)
-_REMOTE_DESC_RE = re.compile(
-    r"\b(fully|100%|completely)[\s-]remote\b|\bremote[\s-]first\b|\bwork from (home|anywhere)\b"
-    r"|\bremote (position|role|job|opportunity)\b|\bthis (role|position|job) is remote\b", re.I)
-_TYPE_PATTERNS: list[tuple[str, re.Pattern]] = [
-    ("internship", re.compile(r"\bintern(ship)?s?\b|\btrainee\b", re.I)),
-    ("part-time", re.compile(r"\bpart[\s-]?time\b", re.I)),
-    ("contract", re.compile(r"\bcontract(or)?\b|\bfreelance\b|\bfixed[\s-]term\b|\bconsultant\b", re.I)),
-    ("full-time", re.compile(r"\bfull[\s-]?time\b|\bpermanent\b", re.I)),
-]
-
-
-def effective_work_mode(job: JobPosting) -> str:
-    """remote | hybrid | onsite | '' (unknown). Uses the source's value first, then the text."""
-    if job.work_mode in ("remote", "hybrid", "onsite"):
-        return job.work_mode
-    if job.remote:
-        return "remote"
-    head = f"{job.title} {job.location}"
-    body = (job.description or "")[:2500]
-    if _HYBRID_RE.search(head) or _HYBRID_RE.search(body):
-        return "hybrid"
-    if _REMOTE_TITLE_LOC_RE.search(head) or _REMOTE_DESC_RE.search(body):
-        return "remote"
-    if _ONSITE_RE.search(head) or _ONSITE_RE.search(body):
-        return "onsite"
-    # a posting tied to a real city with no remote/hybrid wording is, in practice, on-site
-    return "onsite" if (job.location or "").strip() else ""
-
-
-def effective_employment_type(job: JobPosting) -> str:
-    """full-time | part-time | contract | internship. Postings with no signal are treated as
-    full-time (the overwhelming default); title wins over description."""
-    if job.employment_type:
-        return _norm_type(job.employment_type)
-    for text in (job.title or "", (job.description or "")[:2500]):
-        for kind, pat in _TYPE_PATTERNS:
-            if pat.search(text):
-                return kind
-    return "full-time"
-
 
 def passes_filters(job: JobPosting, f: SearchFilters, *, search_locally: bool, now: Optional[datetime] = None) -> bool:
     now = now or datetime.now(timezone.utc)
@@ -87,19 +38,23 @@ def passes_filters(job: JobPosting, f: SearchFilters, *, search_locally: bool, n
         return False
 
     # work mode / location
-    mode = effective_work_mode(job)
     if f.work_mode == "remote":
-        if mode != "remote":
+        if not (job.remote or job.work_mode == "remote"):
             return False
     else:
-        if f.work_mode and mode != f.work_mode:
+        # enrich() has already inferred a mode where it could; a still-unknown mode cannot be
+        # claimed to be hybrid / on-site, so it is excluded when the user asked for one.
+        if f.work_mode and job.work_mode != f.work_mode:
             return False
         if f.location and not location_matches(job.location, f.location):
-            if not (mode == "remote" and not f.work_mode):      # remote jobs stay unless the user asked for on-site/hybrid
+            if not (job.remote and not f.work_mode):      # remote jobs stay unless the user asked for on-site/hybrid
                 return False
 
-    if f.employment_type and effective_employment_type(job) != f.employment_type:
-        return False
+    if f.employment_type:
+        jt = _norm_type(job.employment_type)
+        # no stated type: it is only safe to treat as the default, full-time
+        if (jt or "full-time") != f.employment_type:
+            return False
 
     if f.posted_within_days:
         if job.posted_at is None:

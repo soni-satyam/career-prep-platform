@@ -1,5 +1,6 @@
 """Preparation APIs — full pipeline + individual agent endpoints."""
 
+import re
 from typing import Any, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -22,9 +23,11 @@ from app.core.database import get_db
 from app.models.session import PreparationSession
 from app.models.user import User
 from app.rag.store import ingest_text
+from app.services.ats_score import compare as ats_compare
 from app.services.export_resume import tailored_resume_to_html
+from app.services.export_resume_pdf import DEFAULT_TEMPLATE, TEMPLATES, render_resume_pdf
 from app.api.feature_guard import require_feature
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
 router = APIRouter(prefix="/prep", tags=["preparation"])
 
@@ -178,6 +181,14 @@ async def create_session(
         company = body.company or ""
         title = f"{role}" + (f" @ {company}" if company else "")
 
+    # Before/after keyword match against the JD (same terms for both, so the numbers are comparable).
+    try:
+        ats_match = ats_compare(
+            body.resume_text, pipeline.get("tailored_resume"), pipeline.get("jd_analysis"), body.jd_text
+        )
+    except Exception:
+        ats_match = None  # the meter is a nice-to-have; never fail the session over it
+
     session = PreparationSession(
         user_id=current_user.id,
         title=title[:255],
@@ -190,6 +201,7 @@ async def create_session(
             "profile": pipeline.get("profile"),
             "resume_tips": pipeline.get("resume_tips", []),
             "meta": pipeline.get("meta"),
+            "ats_match": ats_match,
         },
         gap_analysis=pipeline.get("gap_analysis"),
         tailored_resume=pipeline.get("tailored_resume"),
@@ -273,6 +285,38 @@ async def export_session_resume_html(
             "Content-Disposition": f'inline; filename="resume-{session_id}.html"'
         },
     )
+
+@router.get("/resume-templates")
+async def list_resume_templates(current_user: User = Depends(get_current_user)):
+    return {
+        "default": DEFAULT_TEMPLATE,
+        "templates": [{"key": t.key, "label": t.label, "description": t.description} for t in TEMPLATES.values()],
+    }
+
+
+@router.get("/sessions/{session_id}/export-pdf")
+async def export_session_resume_pdf(
+    session_id: int,
+    template: Literal["ats_classic", "ats_compact", "ats_serif"] = DEFAULT_TEMPLATE,
+    page: Literal["a4", "letter"] = "a4",
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download the tailored resume as an ATS-friendly, text-based PDF."""
+    session = await db.get(PreparationSession, session_id)
+    if session is None or session.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Not found")
+    resume = session.tailored_resume
+    if not resume:
+        raise HTTPException(400, "No tailored resume on this session")
+    pdf = render_resume_pdf(resume, template=template, page=page)
+    name = re.sub(r"[^A-Za-z0-9]+", "_", str((resume.get("profile") or {}).get("name") or "Resume")).strip("_") or "Resume"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}_Resume.pdf"'},
+    )
+
 
 # ---------- File upload (resume PDF / DOCX / TXT) ----------
 

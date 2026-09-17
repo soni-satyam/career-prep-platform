@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { prepApi } from '../lib/api'
+import { prepApi, type AtsMatch } from '../lib/api'
+import AtsMatchMeter from '../components/AtsMatchMeter'
+import ResumeExport from '../components/ResumeExport'
 
 export default function ResumeTailor() {
   const [resumeText, setResumeText] = useState('')
@@ -33,7 +35,7 @@ export default function ResumeTailor() {
     }
     setError(null)
     setLoading(true)
-  
+    setStatusMsg('Running multi-agent pipeline (JD → profile → gaps → resume → tips)…')
     try {
       const session = await prepApi.createSession({
         jd_text: jdText,
@@ -53,6 +55,7 @@ export default function ResumeTailor() {
   const tailored = result?.tailored_resume
   const gaps = result?.gap_analysis
   const tips = result?.plan?.resume_tips || []
+  const atsMatch: AtsMatch | null = result?.plan?.ats_match ?? null
 
   return (
     <div className="p-8 max-w-5xl">
@@ -124,6 +127,10 @@ export default function ResumeTailor() {
               Open full session →
             </Link>
           </div>
+
+          {atsMatch && <AtsMatchMeter match={atsMatch} />}
+
+          {tailored && <ResumeExport sessionId={result.id} />}
 
           {gaps && (
             <div className="bg-[#111113] border border-zinc-800 rounded-xl p-5">

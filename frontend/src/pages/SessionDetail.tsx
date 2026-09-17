@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { prepApi } from '../lib/api'
+import AtsMatchMeter from '../components/AtsMatchMeter'
+import ResumeExport from '../components/ResumeExport'
 
 export default function SessionDetail() {
   const { id } = useParams()
@@ -48,35 +50,10 @@ export default function SessionDetail() {
         <p className="text-sm text-zinc-500 capitalize mt-1">
           {session.status} · {Math.round(session.progress_pct || 0)}% complete
         </p>
-        {session.tailored_resume && (
-          <div className="mt-3 flex gap-3">
-            <a
-              href={`${import.meta.env.VITE_API_URL || ''}/api/v1/prep/sessions/${session.id}/export-html`}
-              target="_blank"
-              rel="noreferrer"
-              className="text-sm bg-white text-black px-3 py-1.5 rounded-md font-medium hover:bg-zinc-200"
-              onClick={(e) => {
-                const token = localStorage.getItem('access_token')
-                if (!token) return
-                e.preventDefault()
-                fetch(`${import.meta.env.VITE_API_URL || ''}/api/v1/prep/sessions/${session.id}/export-html`, {
-                  headers: { Authorization: `Bearer ${token}` },
-                })
-                  .then((r) => r.text())
-                  .then((html) => {
-                    const w = window.open('', '_blank')
-                    if (w) {
-                      w.document.write(html)
-                      w.document.close()
-                    }
-                  })
-              }}
-            >
-              Export resume (HTML / Print PDF)
-            </a>
-          </div>
-        )}
       </div>
+
+      {plan.ats_match && <AtsMatchMeter match={plan.ats_match} />}
+      {tailored && <ResumeExport sessionId={session.id} />}
 
       {gaps && (
         <section className="bg-[#111113] border border-zinc-800 rounded-xl p-5">

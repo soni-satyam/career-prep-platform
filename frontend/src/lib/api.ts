@@ -210,7 +210,57 @@ export const profileApi = {
   remove: () => api<CandidateProfile>('/api/v1/profile', { method: 'DELETE' }),
 }
 
+export interface AtsScore {
+  score: number
+  matched: string[]
+  missing: string[]
+  total_terms: number
+}
+
+export interface AtsMatch {
+  before: AtsScore | null
+  after: AtsScore
+  delta: number | null
+  gained: string[]
+  still_missing: string[]
+  method: string
+}
+
+export interface ResumeTemplate {
+  key: string
+  label: string
+  description: string
+}
+
+/** Authenticated file download (a plain <a href> cannot send the Bearer token). */
+async function downloadFile(path: string, fallbackName: string): Promise<void> {
+  const token = localStorage.getItem('access_token')
+  const res = await fetch(`${API_BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new Error(typeof body.detail === 'string' ? body.detail : `Download failed (${res.status})`)
+  }
+  const cd = res.headers.get('Content-Disposition') || ''
+  const name = /filename="?([^";]+)"?/i.exec(cd)?.[1] || fallbackName
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
 export const prepApi = {
+  resumeTemplates: () => api<{ default: string; templates: ResumeTemplate[] }>('/api/v1/prep/resume-templates'),
+  downloadResumePdf: (sessionId: number, template: string, page: string) =>
+    downloadFile(
+      `/api/v1/prep/sessions/${sessionId}/export-pdf?template=${encodeURIComponent(template)}&page=${encodeURIComponent(page)}`,
+      'Resume.pdf'
+    ),
+  downloadResumeHtml: (sessionId: number) =>
+    downloadFile(`/api/v1/prep/sessions/${sessionId}/export-html`, `resume-${sessionId}.html`),
   analyzeJd: (jd_text: string) =>
     api('/api/v1/prep/analyze-jd', { method: 'POST', body: JSON.stringify({ jd_text }) }),
   extractProfile: (resume_text: string) =>

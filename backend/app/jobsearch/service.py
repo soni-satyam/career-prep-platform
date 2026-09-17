@@ -11,6 +11,7 @@ from typing import Any, Optional
 import httpx
 
 from app.core.config import Settings, get_settings
+from app.jobsearch.enrich import enrich
 from app.jobsearch.matching import CandidateProfileView, MatchResult, score_job
 from app.jobsearch.posting import JobPosting, SearchFilters, source_label
 from app.jobsearch.ranking import dedupe, passes_filters, sort_jobs
@@ -135,7 +136,7 @@ async def search_jobs(
             logger.warning("job source %s failed: %s", src.name, msg)
             statuses[src.name] = SourceStatus(src.name, "error", message=msg)
             continue
-        kept = [j for j in res if j.title and j.url
+        kept = [j for j in res if j.title and j.url and enrich(j)
                 and passes_filters(j, f, search_locally=not src.server_side_search)]
         statuses[src.name] = SourceStatus(src.name, "ok", count=len(kept),
                                           message=f"{len(res)} fetched" if len(res) != len(kept) else "")
