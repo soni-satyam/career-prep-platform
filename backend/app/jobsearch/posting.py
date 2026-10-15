@@ -12,10 +12,15 @@ SOURCE_PRIORITY: dict[str, int] = {
     "greenhouse": 1,
     "lever": 2,
     "ashby": 3,
+    "workable": 3,
+    "smartrecruiters": 3,
+    "recruitee": 3,
     "linkedin": 4,
     "naukri": 5,
     "indeed": 6,
     "glassdoor": 7,
+    "wellfound": 7,
+    "instahyre": 7,
 }
 OTHER_PRIORITY = 8
 
@@ -24,6 +29,12 @@ SOURCE_LABELS: dict[str, str] = {
     "greenhouse": "Greenhouse",
     "lever": "Lever",
     "ashby": "Ashby",
+    "workable": "Workable",
+    "smartrecruiters": "SmartRecruiters",
+    "recruitee": "Recruitee",
+    "wellfound": "Wellfound",
+    "instahyre": "Instahyre",
+    "web": "Web search",
     "linkedin": "LinkedIn",
     "naukri": "Naukri",
     "indeed": "Indeed",

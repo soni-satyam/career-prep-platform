@@ -153,6 +153,12 @@ class Settings(BaseSettings):
     job_cache_ttl_seconds: int = 600
     job_max_results: int = 400
 
+    # Company search (app/jobsearch/company)
+    company_cache_ttl_seconds: int = 21600        # how long a looked-up company profile is reused
+    company_lookup_timeout_seconds: float = 25.0  # hard cap for one lookup
+    company_web_search_enabled: bool = True       # job pages found via web search (DuckDuckGo, no key)
+    company_career_budget_seconds: float = 30.0   # max time spent reading one career page
+
     # Logging (see app/core/logging_config.py)
     log_level: str = "INFO"
     log_libs_level: str = "WARNING"

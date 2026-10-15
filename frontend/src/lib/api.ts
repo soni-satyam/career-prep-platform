@@ -173,6 +173,39 @@ export interface CandidateProfile {
   updated_at: string | null
 }
 
+// ---- company search
+export interface CompanyProfile {
+  key: string
+  name: string
+  website: string
+  domain: string
+  logo: string
+  summary: string
+  what_it_does: string
+  founded: string | null
+  headquarters: string | null
+  industry: string | null
+  career_url: string
+  career_status: 'found' | 'guessed' | 'not_found'
+  ats: Array<{ provider: string; slug: string }>
+  sources: string[]
+  alternatives: Array<{ name: string; website: string; domain: string }>
+  links: Array<{ label: string; url: string }>
+  confidence: 'high' | 'medium' | 'low'
+  notes: string[]
+}
+export interface CareerPageInfo {
+  url: string
+  status: 'ok' | 'boards_only' | 'js_rendered' | 'blocked' | 'empty' | 'unreachable'
+  jobs_found: number
+  note: string
+  ats: Array<{ provider: string; slug: string }>
+}
+export interface CompanyJobsResponse extends JobSearchResponse {
+  company: string
+  career_page: CareerPageInfo | null
+}
+
 function toQuery(params: Record<string, unknown>): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
@@ -197,6 +230,13 @@ export const jobsApi = {
   company: (id: number) => api<any>(`/api/v1/jobs/companies/${id}`),
 }
 
+export const companiesApi = {
+  lookup: (q: string, website?: string, signal?: AbortSignal) =>
+    api<CompanyProfile>(`/api/v1/companies/lookup${toQuery({ q, website })}`, { signal }),
+  jobs: (name: string, website: string, params: JobSearchParams, signal?: AbortSignal) =>
+    api<CompanyJobsResponse>(`/api/v1/companies/jobs${toQuery({ name, website, ...params })}`, { signal }),
+}
+
 export const profileApi = {
   get: () => api<CandidateProfile>('/api/v1/profile'),
   uploadResume: (file?: File, text?: string) => {
@@ -210,144 +250,7 @@ export const profileApi = {
   remove: () => api<CandidateProfile>('/api/v1/profile', { method: 'DELETE' }),
 }
 
-export interface AtsScore {
-  score: number
-  matched: string[]
-  missing: string[]
-  total_terms: number
-}
-
-export interface AtsMatch {
-  before: AtsScore | null
-  after: AtsScore
-  delta: number | null
-  gained: string[]
-  still_missing: string[]
-  method: string
-}
-
-export interface TemplateStyle {
-  font: string // 'Helvetica' | 'Times-Roman' (the PDF font family)
-  bold: string
-  body: number // pt
-  name_size: number
-  head_size: number
-  leading: number
-  margin_mm: number
-  section_gap: number
-  rule: boolean
-  align: 'left' | 'center'
-  accent: string // colour of the name and section headings
-  head_bar: boolean // shaded bar behind headings instead of a rule
-  bar_color: string
-}
-
-export interface ResumeTemplate {
-  key: string
-  label: string
-  description: string
-  style: TemplateStyle
-}
-
-export interface ResumeItem {
-  id: string
-  title: string
-  content: string
-  source_refs?: string[]
-}
-export interface ResumeEducation {
-  id: string
-  school: string
-  major: string
-  degree: string
-  start_date: string
-  end_date: string
-}
-export interface TailoredResume {
-  profile: { name: string; email: string; phone: string; city: string; school: string; github: string }
-  summary: string
-  skills: string[]
-  experience: ResumeItem[]
-  projects: ResumeItem[]
-  education: ResumeEducation[]
-  awards: ResumeItem[]
-}
-
-export interface ReadinessVerdict {
-  level: 'ready' | 'almost' | 'needs_work' | 'significant_gap'
-  label: string
-  headline: string
-  factors: Array<{ tone: 'good' | 'ok' | 'bad'; text: string }>
-  counts: { high: number; medium: number; low: number }
-  ai_assessment: string | null
-}
-
-export interface ValidationCheck {
-  id: string
-  label: string
-  status: 'pass' | 'warn' | 'fail'
-  detail: string
-}
-export interface FileValidation {
-  ok: boolean
-  pages: number | null
-  checks: ValidationCheck[]
-}
-export interface GeneratedFile {
-  format: 'pdf' | 'docx'
-  label: string
-  filename: string
-  url: string
-  pages: number | null
-  size_kb: number
-}
-export interface ApprovalResult {
-  approved: boolean
-  approved_at: string | null
-  template: string
-  page: string
-  validation: { pdf: FileValidation; docx: FileValidation }
-  files: GeneratedFile[]
-}
-export interface SavedResume {
-  tailored_resume: TailoredResume
-  ats_match: AtsMatch | null
-  readiness: ReadinessVerdict | null
-  unverified_skills: string[]
-}
-
-/** Authenticated file download (a plain <a href> cannot send the Bearer token). */
-export async function downloadFile(path: string, fallbackName: string): Promise<void> {
-  const token = localStorage.getItem('access_token')
-  const res = await fetch(`${API_BASE}${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}))
-    throw new Error(typeof body.detail === 'string' ? body.detail : `Download failed (${res.status})`)
-  }
-  const cd = res.headers.get('Content-Disposition') || ''
-  const name = /filename="?([^";]+)"?/i.exec(cd)?.[1] || fallbackName
-  const url = URL.createObjectURL(await res.blob())
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  setTimeout(() => URL.revokeObjectURL(url), 10_000)
-}
-
 export const prepApi = {
-  resumeTemplates: () => api<{ default: string; templates: ResumeTemplate[] }>('/api/v1/prep/resume-templates'),
-  saveResume: (sessionId: number, resume: TailoredResume) =>
-    api<SavedResume>(`/api/v1/prep/sessions/${sessionId}/resume`, { method: 'PATCH', body: JSON.stringify(resume) }),
-  approveResume: (sessionId: number, template: string, page: string) =>
-    api<ApprovalResult>(
-      `/api/v1/prep/sessions/${sessionId}/resume/approve?template=${encodeURIComponent(template)}&page=${encodeURIComponent(page)}`,
-      { method: 'POST' }
-    ),
-  downloadByUrl: (url: string, fallbackName: string) => downloadFile(url, fallbackName),
-  downloadResumeHtml: (sessionId: number) =>
-    downloadFile(`/api/v1/prep/sessions/${sessionId}/export-html`, `resume-${sessionId}.html`),
   analyzeJd: (jd_text: string) =>
     api('/api/v1/prep/analyze-jd', { method: 'POST', body: JSON.stringify({ jd_text }) }),
   extractProfile: (resume_text: string) =>
