@@ -13,6 +13,8 @@ import AtsMatchMeter from './AtsMatchMeter'
 import ReadinessPanel from './ReadinessPanel'
 import ResumeEditor from './ResumeEditor'
 import ResumePreview from './ResumePreview'
+import SectionIndex, { type IndexItem } from './SectionIndex'
+import { useScrollSpy } from '../lib/useScrollSpy'
 
 const EMPTY: TailoredResume = {
   profile: { name: '', email: '', phone: '', city: '', school: '', github: '' },
@@ -51,7 +53,7 @@ function Steps({ stage }: { stage: 2 | 3 }) {
   )
 }
 
-export default function ResumeWorkspace({ session }: { session: any }) {
+export default function ResumeWorkspace({ session, tips }: { session: any; tips?: string[] }) {
   const plan = session.plan || {}
   const initial = useMemo(() => normalize(session.tailored_resume), [session.tailored_resume])
 
@@ -128,19 +130,77 @@ export default function ResumeWorkspace({ session }: { session: any }) {
     setResetKey((k) => k + 1)
   }
 
+  // ---- guide / index -------------------------------------------------------------------------------
+  const tplLabel = templates.find((t) => t.key === template)?.label ?? ''
+  const flaggedShown = draft.skills.filter((sk) => unverified.some((u) => u.toLowerCase() === sk.trim().toLowerCase())).length
+  const hasTips = !!tips && tips.length > 0
+  const items: IndexItem[] = [
+    ...(match
+      ? [{
+          id: 'rt-match', label: 'Match score', hint: 'How much of the job your resume covers.',
+          badge: { text: match.before ? `${match.before.score}% → ${match.after.score}%` : `${match.after.score}%`, tone: match.after.score >= 75 ? 'good' : match.after.score >= 50 ? 'ok' : 'bad' },
+        } as IndexItem]
+      : []),
+    {
+      id: 'rt-readiness', label: 'Readiness', hint: 'What is strong, and what to fix first.',
+      badge: readiness ? { text: readiness.label, tone: readiness.level === 'ready' ? 'good' : readiness.level === 'significant_gap' ? 'bad' : 'ok' } : undefined,
+    },
+    { id: 'rt-template', label: 'Template', hint: 'Pick an ATS-safe look and page size.', badge: tplLabel ? { text: tplLabel, tone: 'muted' } : undefined },
+    {
+      id: 'rt-edit', label: 'Edit resume', hint: 'Fix wording and remove anything untrue.',
+      status: dirty || flaggedShown > 0 ? 'attention' : undefined,
+      badge: dirty ? { text: 'Unsaved changes', tone: 'ok' } : flaggedShown > 0 ? { text: `${flaggedShown} skill${flaggedShown > 1 ? 's' : ''} to check`, tone: 'ok' } : undefined,
+      children: [
+        { id: 'rt-edit-contact', label: 'Contact' },
+        { id: 'rt-edit-summary', label: 'Summary' },
+        { id: 'rt-edit-skills', label: 'Skills', attention: flaggedShown > 0 },
+        { id: 'rt-edit-experience', label: 'Experience' },
+        { id: 'rt-edit-projects', label: 'Projects' },
+        { id: 'rt-edit-education', label: 'Education' },
+        { id: 'rt-edit-awards', label: 'Awards' },
+      ],
+    },
+    { id: 'rt-preview', label: 'Preview', hint: 'See what the recruiter will get.' },
+    {
+      id: 'rt-approve', label: 'Approve & download', hint: 'Generate and check the PDF and Word files.',
+      status: approved ? 'done' : undefined, badge: approved ? { text: 'Approved', tone: 'good' } : undefined,
+    },
+    ...(hasTips ? [{ id: 'rt-tips', label: 'Resume tips', hint: 'Quick wins before you apply.' } as IndexItem] : []),
+  ]
+  // preview sits beside the editor, so it is a jump target but not part of the "where am I" tracking
+  const spyIds = items.flatMap((i) => (i.id === 'rt-preview' ? [] : [i.id, ...(i.children?.map((c) => c.id) ?? [])]))
+  const { active, goTo } = useScrollSpy(spyIds)
+  const go = (id: string) => {
+    // on narrow screens editor and preview are tabs: make sure the target is the visible one first
+    if (id.startsWith('rt-edit')) setTab('edit')
+    if (id === 'rt-preview') setTab('preview')
+    requestAnimationFrame(() => goTo(id, id !== 'rt-preview'))
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="xl:grid xl:grid-cols-[minmax(0,1fr)_12rem] xl:gap-8 items-start">
+    <div className="space-y-6 min-w-0">
       <Steps stage={approved ? 3 : 2} />
+      {/* sticky must sit on a direct child of the tall column, or it cannot travel with the page */}
+      <div className="xl:hidden sticky top-0 z-20 -mx-4 sm:-mx-8 px-4 sm:px-8 py-2 bg-[#0a0a0b]/90 backdrop-blur border-b border-zinc-800">
+        <SectionIndex variant="bar" items={items} active={active} onGo={go} />
+      </div>
 
       {error && (
         <div className="p-3 rounded-md bg-red-500/10 border border-red-500/30 text-red-300 text-sm">{error}</div>
       )}
 
-      {match && <AtsMatchMeter match={match} />}
-      <ReadinessPanel readiness={readiness} analysis={session.gap_analysis ?? null} />
+      {match && (
+        <div id="rt-match" tabIndex={-1} className="scroll-mt-16 xl:scroll-mt-4 outline-none">
+          <AtsMatchMeter match={match} />
+        </div>
+      )}
+      <div id="rt-readiness" tabIndex={-1} className="scroll-mt-16 xl:scroll-mt-4 outline-none">
+        <ReadinessPanel readiness={readiness} analysis={session.gap_analysis ?? null} />
+      </div>
 
       {/* template */}
-      <section className="bg-[#111113] border border-zinc-800 rounded-xl p-5 sm:p-6">
+      <section id="rt-template" tabIndex={-1} className="bg-[#111113] border border-zinc-800 rounded-xl p-5 sm:p-6 scroll-mt-16 xl:scroll-mt-4 outline-none">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
           <div>
             <h2 className="font-medium">Template</h2>
@@ -186,7 +246,7 @@ export default function ResumeWorkspace({ session }: { session: any }) {
       </section>
 
       {/* edit + preview */}
-      <section>
+      <section id="rt-edit" tabIndex={-1} className="scroll-mt-16 xl:scroll-mt-4 outline-none">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
           <div>
             <h2 className="font-medium">Review &amp; edit your resume</h2>
@@ -230,7 +290,7 @@ export default function ResumeWorkspace({ session }: { session: any }) {
           <div className={`${tab === 'edit' ? 'block' : 'hidden'} lg:block`}>
             <ResumeEditor resume={draft} onChange={setDraft} unverified={unverified} resetKey={resetKey} />
           </div>
-          <div className={`${tab === 'preview' ? 'block' : 'hidden'} lg:block lg:sticky lg:top-4`}>
+          <div id="rt-preview" tabIndex={-1} className={`${tab === 'preview' ? 'block' : 'hidden'} lg:block lg:sticky lg:top-4 scroll-mt-16 xl:scroll-mt-4 outline-none`}>
             <ResumePreview resume={draft} style={style} page={page} />
             <button
               type="button"
@@ -267,14 +327,32 @@ export default function ResumeWorkspace({ session }: { session: any }) {
         </div>
       )}
 
-      <ApproveAndDownload
-        sessionId={session.id}
-        dirty={dirty}
-        busy={approving || saving}
-        result={approved || (approval && !dirty) ? approval : null}
-        approvedEarlier={approvedEarlier}
-        onApprove={approve}
-      />
+      <div id="rt-approve" tabIndex={-1} className="scroll-mt-16 xl:scroll-mt-4 outline-none">
+        <ApproveAndDownload
+          sessionId={session.id}
+          dirty={dirty}
+          busy={approving || saving}
+          result={approved || (approval && !dirty) ? approval : null}
+          approvedEarlier={approvedEarlier}
+          onApprove={approve}
+        />
+      </div>
+
+      {hasTips && (
+        <section id="rt-tips" tabIndex={-1} className="bg-[#111113] border border-zinc-800 rounded-xl p-5 scroll-mt-16 xl:scroll-mt-4 outline-none">
+          <h2 className="font-medium mb-3">Resume tips</h2>
+          <ul className="space-y-2 text-sm text-zinc-300 list-disc list-inside">
+            {tips!.map((t, i) => (
+              <li key={i}>{t}</li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </div>
+
+    <div className="hidden xl:block sticky top-4 self-start">
+      <SectionIndex variant="rail" items={items} active={active} onGo={go} />
+    </div>
     </div>
   )
 }

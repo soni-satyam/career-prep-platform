@@ -8,9 +8,9 @@ const label = 'block text-xs text-zinc-400 mb-1'
 
 const uid = (p: string) => `${p}_${Math.random().toString(36).slice(2, 8)}`
 
-function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
+function Card({ id, title, children, action }: { id: string; title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
-    <section className="bg-[#111113] border border-zinc-800 rounded-xl p-4">
+    <section id={id} tabIndex={-1} className="bg-[#111113] border border-zinc-800 rounded-xl p-4 scroll-mt-16 xl:scroll-mt-4 outline-none">
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-medium">{title}</h3>
         {action}
@@ -36,6 +36,7 @@ function IconBtn({ onClick, title, disabled, children }: { onClick: () => void; 
 }
 
 function ItemList({
+  id,
   heading,
   items,
   onChange,
@@ -43,6 +44,7 @@ function ItemList({
   titlePlaceholder,
   contentPlaceholder,
 }: {
+  id: string
   heading: string
   items: ResumeItem[]
   onChange: (items: ResumeItem[]) => void
@@ -59,6 +61,7 @@ function ItemList({
   }
   return (
     <Card
+      id={id}
       title={heading}
       action={
         <button
@@ -146,7 +149,7 @@ export default function ResumeEditor({
         </div>
       )}
 
-      <Card title="Contact">
+      <Card id="rt-edit-contact" title="Contact">
         <div className="grid sm:grid-cols-2 gap-3">
           {(
             [
@@ -165,7 +168,7 @@ export default function ResumeEditor({
         </div>
       </Card>
 
-      <Card title="Summary">
+      <Card id="rt-edit-summary" title="Summary">
         <textarea
           className={`${input} min-h-24`}
           placeholder="2–3 sentences aimed at this role"
@@ -174,7 +177,7 @@ export default function ResumeEditor({
         />
       </Card>
 
-      <Card title="Skills">
+      <Card id="rt-edit-skills" title="Skills">
         <textarea
           className={`${input} min-h-20`}
           placeholder="Comma separated, most relevant first"
@@ -202,6 +205,7 @@ export default function ResumeEditor({
       </Card>
 
       <ItemList
+        id="rt-edit-experience"
         heading="Experience"
         prefix="exp"
         items={resume.experience}
@@ -210,6 +214,7 @@ export default function ResumeEditor({
         contentPlaceholder={'- Built X that did Y, improving Z by N%\n- ...'}
       />
       <ItemList
+        id="rt-edit-projects"
         heading="Projects"
         prefix="proj"
         items={resume.projects}
@@ -219,6 +224,7 @@ export default function ResumeEditor({
       />
 
       <Card
+        id="rt-edit-education"
         title="Education"
         action={
           <button
@@ -252,6 +258,7 @@ export default function ResumeEditor({
       </Card>
 
       <ItemList
+        id="rt-edit-awards"
         heading="Awards"
         prefix="award"
         items={resume.awards}

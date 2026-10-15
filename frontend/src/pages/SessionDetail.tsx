@@ -41,7 +41,7 @@ export default function SessionDetail() {
   const tips = plan.resume_tips || []
 
   return (
-    <div className="p-4 sm:p-8 max-w-6xl space-y-6">
+    <div className="p-4 sm:p-8 max-w-7xl space-y-6">
       <div>
         <Link to="/progress" className="text-sm text-zinc-400 hover:text-white">
           ← All sessions
@@ -54,7 +54,7 @@ export default function SessionDetail() {
 
       {tailored ? (
         // match meters, readiness, editor + live preview, approve & download
-        <ResumeWorkspace key={session.id} session={session} />
+        <ResumeWorkspace key={session.id} session={session} tips={tips} />
       ) : (
         gaps && <ReadinessPanel readiness={plan.readiness ?? null} analysis={gaps} />
       )}
@@ -93,7 +93,7 @@ export default function SessionDetail() {
         </section>
       )}
 
-      {tips.length > 0 && (
+      {!tailored && tips.length > 0 && (
         <section className="bg-[#111113] border border-zinc-800 rounded-xl p-5">
           <h2 className="font-medium mb-2">Resume tips</h2>
           <ul className="text-sm text-zinc-300 list-disc list-inside">

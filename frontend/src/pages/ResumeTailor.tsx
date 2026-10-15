@@ -74,7 +74,7 @@ export default function ResumeTailor() {
   const tips = result?.plan?.resume_tips || []
 
   return (
-    <div className="p-4 sm:p-8 max-w-6xl">
+    <div className="p-4 sm:p-8 max-w-7xl">
       <h1 className="text-2xl font-semibold mb-1">Tailor Your Resume</h1>
       <p className="text-zinc-400 mb-8">
         Upload or paste your resume and a job description to get a tailored version, gap analysis, and tips.
@@ -158,18 +158,7 @@ export default function ResumeTailor() {
             </Link>
           </div>
 
-          {tailored && <ResumeWorkspace key={result.id} session={result} />}
-
-          {tips.length > 0 && (
-            <div className="bg-[#111113] border border-zinc-800 rounded-xl p-5">
-              <h2 className="font-medium mb-3">Resume tips</h2>
-              <ul className="space-y-2 text-sm text-zinc-300 list-disc list-inside">
-                {tips.map((t: string, i: number) => (
-                  <li key={i}>{t}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {tailored && <ResumeWorkspace key={result.id} session={result} tips={tips} />}
         </div>
       )}
     </div>
