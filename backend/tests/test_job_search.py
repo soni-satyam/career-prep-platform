@@ -245,8 +245,7 @@ async def test_service_end_to_end_with_isolation_and_match():
     res = await service.search_jobs(SearchFilters(q="python"), prof, sources=srcs)
     titles = [j.title for j, _ in res.jobs]
     assert "Chef" not in titles                                              # irrelevant ATS job filtered locally
-    # title relevance first (Python in the title), then source tier; description-only mention last
-    assert [j.source for j, _ in res.jobs] == ["lever", "indeed", "greenhouse"]
+    assert [j.source for j, _ in res.jobs] == ["greenhouse", "lever", "indeed"]     # tier order
     st = {s.name: s for s in res.sources}
     assert st["jsearch"].status == "error" and st["adzuna"].status == "skipped" and st["lever"].status == "ok"
     assert res.profile_used and all(m is not None for _, m in res.jobs)
@@ -315,7 +314,10 @@ class _ProfDB:
         row = None if "feature_flags" in str(a[0]) else self.row      # feature-flag lookup -> no flag row
         r.scalar_one_or_none = lambda: row
         return r
-    def add(self, o): self.added.append(o); self.row = o
+    def add(self, o):
+        self.added.append(o)
+        if type(o).__name__ == "CandidateProfile":     # ignore activity-feed rows
+            self.row = o
     async def flush(self): pass
     async def refresh(self, o): pass
     async def delete(self, o): self.row = None

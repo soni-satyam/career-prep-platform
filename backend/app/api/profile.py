@@ -18,6 +18,7 @@ from app.jobsearch.text import (
 )
 from app.models.profile import CandidateProfile
 from app.models.user import User
+from app.services.activity import log_activity
 from app.services.documents import extract_text_from_upload
 
 router = APIRouter(prefix="/profile", tags=["profile"])
@@ -108,6 +109,7 @@ async def upload_resume(
     p.structured = {"extracted_by": "rules", "skill_count": len(skills)}
     await db.flush()
     await db.refresh(p)
+    await log_activity(db, user.id, "resume_uploaded", "Resume uploaded" if filename == "pasted text" else f"Resume uploaded: {filename}", f"{len(skills)} skills found", "/jobs")
     return _out(p)
 
 

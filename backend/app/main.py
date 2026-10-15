@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, text
 
-from app.api import admin, auth, company_search, features, health, job_search, jobs, live_interview, prep, profile, quizzes, users
+from app.api import admin, auth, company_search, dashboard, features, health, job_search, jobs, live_interview, prep, profile, quizzes, tracker, users
 from app.core.config import get_settings
 from app.core.logging_config import setup_logging
 from app.core.errors import register_exception_handlers
@@ -90,6 +90,8 @@ app.include_router(job_search.router, prefix="/api/v1")  # must be before jobs: 
 app.include_router(company_search.router, prefix="/api/v1")
 app.include_router(jobs.router, prefix="/api/v1")
 app.include_router(profile.router, prefix="/api/v1")
+app.include_router(tracker.router, prefix="/api/v1")
+app.include_router(dashboard.router, prefix="/api/v1")
 app.include_router(quizzes.router, prefix="/api/v1")
 app.include_router(live_interview.router, prefix="/api/v1")
 app.include_router(features.router, prefix="/api/v1")

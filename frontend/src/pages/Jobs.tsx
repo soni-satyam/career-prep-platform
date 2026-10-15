@@ -8,6 +8,8 @@ import {
   type JobSearchResponse,
 } from '../lib/api'
 
+import JobActions from '../components/dashboard/JobActions'
+
 const PAGE_SIZE = 20
 
 const SOURCES: Array<{ key: string; label: string }> = [
@@ -218,6 +220,10 @@ function JobCard({ job }: { job: JobResult }) {
       </div>
 
       {job.snippet && <p className="text-sm text-zinc-400 mt-3 line-clamp-2">{job.snippet}</p>}
+
+      <div className="mt-3">
+        <JobActions job={job} />
+      </div>
 
       <div className="flex items-center justify-between mt-3">
         <div className="text-xs text-zinc-500">
