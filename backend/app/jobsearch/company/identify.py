@@ -52,6 +52,14 @@ def to_url(q: str) -> str:
     return q if re.match(r"^https?://", q, re.I) else f"https://{q}"
 
 
+def normalize_url(url: str) -> str:
+    """Stable form for a site address: scheme://host/path with at least a "/" path."""
+    p = urlparse(url or "")
+    if not p.scheme or not p.netloc:
+        return url or ""
+    return f"{p.scheme}://{p.netloc}{p.path or '/'}"
+
+
 def domain_of(url: str) -> str:
     host = (urlparse(url).hostname or "").lower()
     return host[4:] if host.startswith("www.") else host
@@ -143,11 +151,12 @@ def guess_domains(name: str) -> list[str]:
 _SLUG_OK = re.compile(r"^[a-z0-9][a-z0-9-]{1,38}$")
 
 
-def slug_candidates(name: str, domain: str = "") -> list[str]:
-    """Likely ATS board slugs: acmerobotics, acme-robotics, and the website's own label."""
+def slug_candidates(name: str, domain: str = "", extra: tuple[str, ...] | list[str] = ()) -> list[str]:
+    """Likely ATS board slugs: acmerobotics, acme-robotics, the website's own label, and any known slug
+    (a company's LinkedIn slug is very often its job-board slug too)."""
     toks = name_tokens(name)
     out: list[str] = []
-    for s in ("".join(toks), "-".join(toks), registrable_label(domain).replace("_", "-") if domain else ""):
+    for s in ("".join(toks), "-".join(toks), registrable_label(domain).replace("_", "-") if domain else "", *extra):
         if s and _SLUG_OK.match(s) and s not in out:
             out.append(s)
     return out
@@ -184,11 +193,13 @@ def company_matches(job_company: str, name: str, aliases: tuple[str, ...] | list
     return False
 
 
-def browse_links(name: str, key: str) -> list[dict]:
+def browse_links(name: str, key: str, linkedin_slug: str = "") -> list[dict]:
     """Search pages on other portals. Plain links, nothing is scraped from them."""
     q = quote_plus(name)
+    linkedin = (f"https://www.linkedin.com/company/{quote(linkedin_slug)}/jobs/" if linkedin_slug
+                else f"https://www.linkedin.com/jobs/search/?keywords={q}")
     return [
-        {"label": "LinkedIn", "url": f"https://www.linkedin.com/jobs/search/?keywords={q}"},
+        {"label": "LinkedIn", "url": linkedin},
         {"label": "Naukri", "url": f"https://www.naukri.com/{quote(key)}-jobs"},
         {"label": "Indeed", "url": f"https://www.indeed.com/jobs?q={q}"},
         {"label": "Wellfound", "url": f"https://wellfound.com/company/{quote(key)}/jobs"},

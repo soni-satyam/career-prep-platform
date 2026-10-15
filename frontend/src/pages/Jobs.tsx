@@ -7,8 +7,246 @@ import {
   type JobSearchParams,
   type JobSearchResponse,
 } from '../lib/api'
-import FilterPanel from '../components/jobs/FilterPanel'
-import { DEFAULT_FILTERS, JobCard, activeChips, inputCls, toParams, type Filters } from '../components/jobs/shared'
+
+const PAGE_SIZE = 20
+
+const SOURCES: Array<{ key: string; label: string }> = [
+  { key: 'career_page', label: 'Company career pages' },
+  { key: 'greenhouse', label: 'Greenhouse' },
+  { key: 'lever', label: 'Lever' },
+  { key: 'ashby', label: 'Ashby' },
+  { key: 'linkedin', label: 'LinkedIn' },
+  { key: 'naukri', label: 'Naukri' },
+  { key: 'indeed', label: 'Indeed' },
+  { key: 'glassdoor', label: 'Glassdoor' },
+  { key: 'other', label: 'Other portals' },
+]
+
+const TIER_STYLE: Record<string, string> = {
+  career_page: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+  greenhouse: 'bg-teal-500/15 text-teal-300 border-teal-500/30',
+  lever: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  ashby: 'bg-indigo-500/15 text-indigo-300 border-indigo-500/30',
+  linkedin: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+  naukri: 'bg-orange-500/15 text-orange-300 border-orange-500/30',
+  indeed: 'bg-violet-500/15 text-violet-300 border-violet-500/30',
+}
+
+interface Filters {
+  q: string
+  location: string
+  work_mode: string
+  salary: string // amount typed by the user (LPA for INR, thousands otherwise)
+  currency: string
+  includeNoSalary: boolean
+  expMin: string
+  expMax: string
+  employment_type: string
+  posted: string
+  sources: string[]
+  sort: string
+}
+
+const DEFAULT_FILTERS: Filters = {
+  q: '',
+  location: '',
+  work_mode: '',
+  salary: '',
+  currency: 'INR',
+  includeNoSalary: true,
+  expMin: '',
+  expMax: '',
+  employment_type: '',
+  posted: '',
+  sources: [],
+  sort: 'priority',
+}
+
+function toParams(f: Filters, page: number): JobSearchParams {
+  const salaryNum = parseFloat(f.salary)
+  const hasSalary = Number.isFinite(salaryNum) && salaryNum > 0
+  const num = (s: string) => (s.trim() !== '' && Number.isFinite(parseFloat(s)) ? parseFloat(s) : undefined)
+  return {
+    q: f.q.trim() || undefined,
+    location: f.location.trim() || undefined,
+    work_mode: f.work_mode || undefined,
+    // INR is typed in lakhs per annum, other currencies in thousands per year
+    salary_min: hasSalary ? Math.round(salaryNum * (f.currency === 'INR' ? 100_000 : 1_000)) : undefined,
+    salary_currency: hasSalary ? f.currency : undefined,
+    include_unspecified_salary: hasSalary ? f.includeNoSalary : undefined,
+    experience_min: num(f.expMin),
+    experience_max: num(f.expMax),
+    employment_type: f.employment_type || undefined,
+    posted_within_days: f.posted ? parseInt(f.posted, 10) : undefined,
+    sources: f.sources.length ? f.sources : undefined,
+    sort: f.sort,
+    page,
+    page_size: PAGE_SIZE,
+  }
+}
+
+function timeAgo(iso: string | null): string {
+  if (!iso) return 'Date not listed'
+  const diff = Date.now() - new Date(iso).getTime()
+  const h = Math.floor(diff / 3_600_000)
+  if (h < 1) return 'Just now'
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  if (d < 30) return d === 1 ? '1 day ago' : `${d} days ago`
+  const m = Math.floor(d / 30)
+  return m === 1 ? '1 month ago' : `${m} months ago`
+}
+
+function money(n: number, cur: string): string {
+  if (cur === 'INR') return n >= 100_000 ? `₹${+(n / 100_000).toFixed(1)}L` : `₹${Math.round(n).toLocaleString('en-IN')}`
+  const sym: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' }
+  const s = sym[cur] ?? `${cur} `
+  return n >= 1000 ? `${s}${Math.round(n / 1000)}k` : `${s}${Math.round(n)}`
+}
+
+function salaryText(j: JobResult): string {
+  if (j.salary_min == null && j.salary_max == null) return j.salary_text
+  const cur = j.salary_currency || ''
+  if (j.salary_min != null && j.salary_max != null && j.salary_min !== j.salary_max)
+    return `${money(j.salary_min, cur)} – ${money(j.salary_max, cur)} / yr`
+  return `${money((j.salary_max ?? j.salary_min) as number, cur)} / yr`
+}
+
+function expText(j: JobResult): string {
+  const { experience_min: lo, experience_max: hi } = j
+  if (lo == null && hi == null) return ''
+  if (lo != null && hi != null) return `${lo}–${hi} yrs exp`
+  if (lo != null) return `${lo}+ yrs exp`
+  return `up to ${hi} yrs exp`
+}
+
+const inputCls =
+  'w-full bg-[#111113] border border-zinc-800 rounded-md px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:border-zinc-600'
+
+function MatchPill({ job }: { job: JobResult }) {
+  const [open, setOpen] = useState(false)
+  if (!job.match) return null
+  const s = job.match.score
+  const tone =
+    s >= 75
+      ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
+      : s >= 50
+        ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+        : 'bg-zinc-800 text-zinc-300 border-zinc-700'
+  return (
+    <div className="text-right shrink-0">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`border rounded-full px-2.5 py-1 text-xs font-semibold ${tone}`}
+        title="How well your profile matches this job. Click for details."
+      >
+        {s}% match
+      </button>
+      {open && (
+        <div className="mt-2 text-left text-xs bg-[#0c0c0e] border border-zinc-800 rounded-lg p-3 w-64 absolute right-4 z-10 shadow-xl">
+          {job.match.matched_skills.length > 0 && (
+            <div className="mb-2">
+              <div className="text-zinc-500 mb-1">You have</div>
+              <div className="flex flex-wrap gap-1">
+                {job.match.matched_skills.map((s) => (
+                  <span key={s} className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {job.match.missing_skills.length > 0 && (
+            <div>
+              <div className="text-zinc-500 mb-1">Worth adding</div>
+              <div className="flex flex-wrap gap-1">
+                {job.match.missing_skills.map((s) => (
+                  <span key={s} className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                    {s}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {job.match.matched_skills.length === 0 && job.match.missing_skills.length === 0 && (
+            <div className="text-zinc-500">Based on job title and experience (no skills listed in the posting).</div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function JobCard({ job }: { job: JobResult }) {
+  const sal = salaryText(job)
+  const exp = expText(job)
+  const mode = job.work_mode || (job.remote ? 'remote' : '')
+  return (
+    <div className="relative bg-[#111113] border border-zinc-800 rounded-xl p-4 hover:border-zinc-600 transition">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <a
+            href={job.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-sm hover:underline break-words"
+          >
+            {job.title}
+          </a>
+          <div className="text-xs text-zinc-400 mt-1">
+            {job.company || 'Company'}
+            {job.location ? ` · ${job.location}` : ''}
+            {mode ? ` · ${mode}` : ''}
+          </div>
+        </div>
+        <MatchPill job={job} />
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5 mt-3 text-xs">
+        <span
+          className={`border rounded px-1.5 py-0.5 ${TIER_STYLE[job.source] ?? 'bg-zinc-800 text-zinc-300 border-zinc-700'}`}
+        >
+          {job.source_label}
+        </span>
+        <span className="text-zinc-500">{timeAgo(job.posted_at)}</span>
+        {sal && <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-200">{sal}</span>}
+        {exp && <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">{exp}</span>}
+        {job.employment_type && (
+          <span className="px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">{job.employment_type}</span>
+        )}
+      </div>
+
+      {job.snippet && <p className="text-sm text-zinc-400 mt-3 line-clamp-2">{job.snippet}</p>}
+
+      <div className="flex items-center justify-between mt-3">
+        <div className="text-xs text-zinc-500">
+          {job.also_on.length > 0 && (
+            <>
+              Also on{' '}
+              {job.also_on.map((a, i) => (
+                <span key={a.source}>
+                  {i > 0 && ', '}
+                  <a href={a.url} target="_blank" rel="noopener noreferrer" className="underline hover:text-zinc-300">
+                    {a.label}
+                  </a>
+                </span>
+              ))}
+            </>
+          )}
+        </div>
+        <a
+          href={job.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="bg-white text-black text-xs font-medium px-3 py-1.5 rounded-md"
+        >
+          Apply
+        </a>
+      </div>
+    </div>
+  )
+}
 
 function ResumePanel({
   profile,
@@ -159,6 +397,44 @@ function ResumePanel({
   )
 }
 
+const WORK_MODES: Array<[string, string]> = [['', 'Any'], ['remote', 'Remote'], ['hybrid', 'Hybrid'], ['onsite', 'On-site']]
+const JOB_TYPES: Array<[string, string]> = [
+  ['', 'Any'], ['full-time', 'Full-time'], ['part-time', 'Part-time'], ['contract', 'Contract'], ['internship', 'Internship'],
+]
+const POSTED: Array<[string, string]> = [
+  ['', 'Any time'], ['1', '24 hours'], ['3', '3 days'], ['7', 'Week'], ['14', '2 weeks'], ['30', 'Month'],
+]
+const labelOf = (opts: Array<[string, string]>, v: string) => opts.find(([k]) => k === v)?.[1] ?? v
+
+function Pill({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`px-3 py-1.5 rounded-full text-xs border transition ${
+        active
+          ? 'bg-white text-black border-white font-medium'
+          : 'border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function FilterSection({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="py-4 border-b border-zinc-800 last:border-b-0">
+      <div className="flex items-baseline justify-between mb-2.5">
+        <h3 className="text-xs font-medium uppercase tracking-wide text-zinc-400">{title}</h3>
+        {hint && <span className="text-[11px] text-zinc-600">{hint}</span>}
+      </div>
+      {children}
+    </div>
+  )
+}
+
 export default function Jobs() {
   const [hasSearched, setHasSearched] = useState(false)
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS)
@@ -212,14 +488,39 @@ export default function Jobs() {
   }, [committed, profileKey, profileLoaded, hasSearched, run])
 
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setFilters((f) => ({ ...f, [k]: v }))
-  const apply = (next?: Partial<Filters>) => {
-    setCommitted({ ...filters, ...next })
+  // Commit filters and search. `patch` is applied to the panel too, so what you see always matches what ran.
+  const apply = (patch: Partial<Filters> = {}) => {
+    const next = { ...filters, ...patch }
+    setFilters(next)
+    setCommitted(next)
     setHasSearched(true)
   }
   const hasProfile = !!profile?.has_profile
 
   const problems = useMemo(() => (data?.sources ?? []).filter((s) => s.status !== 'ok'), [data])
-  const chips = useMemo(() => activeChips(committed), [committed])
+  const dirty = JSON.stringify(filters) !== JSON.stringify(committed)
+
+  // What is actually applied right now, as removable chips.
+  const chips: Array<{ key: string; label: string; clear: Partial<Filters> }> = []
+  if (committed.work_mode) chips.push({ key: 'wm', label: labelOf(WORK_MODES, committed.work_mode), clear: { work_mode: '' } })
+  if (committed.employment_type)
+    chips.push({ key: 'et', label: labelOf(JOB_TYPES, committed.employment_type), clear: { employment_type: '' } })
+  if (committed.posted) chips.push({ key: 'po', label: `Posted: ${labelOf(POSTED, committed.posted)}`, clear: { posted: '' } })
+  if (committed.salary)
+    chips.push({
+      key: 'sa',
+      label: `Salary ≥ ${committed.salary}${committed.currency === 'INR' ? 'L' : 'k'} ${committed.currency}`,
+      clear: { salary: '' },
+    })
+  if (committed.expMin || committed.expMax)
+    chips.push({ key: 'ex', label: `${committed.expMin || 0}–${committed.expMax || '∞'} yrs exp`, clear: { expMin: '', expMax: '' } })
+  committed.sources.forEach((src) =>
+    chips.push({
+      key: `s_${src}`,
+      label: SOURCES.find((x) => x.key === src)?.label ?? src,
+      clear: { sources: committed.sources.filter((x) => x !== src) },
+    })
+  )
   const activeFilterCount = chips.length
 
   const resetFilters = () => apply({ ...DEFAULT_FILTERS, q: filters.q, location: filters.location })
@@ -411,13 +712,16 @@ export default function Jobs() {
         </button>
       </form>
 
-      <div className="flex items-center gap-3 mb-4 text-sm">
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
+        {/* ---------------- results ---------------- */}
+        <div className="min-w-0">
+          <div className="flex items-center gap-3 mb-3 text-sm flex-wrap">
             <button
               type="button"
-          onClick={() => setShowFilters((s) => !s)}
-          className="border border-zinc-700 rounded-md px-3 py-1.5 hover:border-zinc-500"
+              onClick={() => setShowFilters((v) => !v)}
+              className="lg:hidden border border-zinc-700 rounded-md px-3 py-1.5 hover:border-zinc-500"
             >
-          Filters{activeFilterCount ? ` (${activeFilterCount})` : ''}
+              {showFilters ? 'Hide filters' : `Filters${activeFilterCount ? ` (${activeFilterCount})` : ''}`}
             </button>
             <label className="flex items-center gap-2 text-zinc-400">
               Sort
@@ -447,14 +751,17 @@ export default function Jobs() {
                   {c.label}
                   <button
                     type="button"
+                    onClick={() => apply(c.clear)}
                     aria-label={`Remove filter ${c.label}`}
-                onClick={() => removeChip(c.clear)}
-                className="text-zinc-400 hover:text-white leading-none px-1"
+                    className="w-4 h-4 rounded-full flex items-center justify-center text-zinc-400 hover:bg-zinc-700 hover:text-white"
                   >
                     ×
                   </button>
                 </span>
               ))}
+              <button type="button" onClick={resetFilters} className="text-xs text-zinc-500 underline">
+                Clear all
+              </button>
             </div>
           )}
 

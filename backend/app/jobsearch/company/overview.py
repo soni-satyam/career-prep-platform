@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from app.jobsearch.company.discover import PageInfo, extract_founded
 from app.jobsearch.company.identify import name_tokens
+from app.jobsearch.company.linkedin import LinkedInCompany
 
 logger = logging.getLogger("careerprep.jobs")
 
@@ -47,6 +48,7 @@ class Overview:
     founded: Optional[str] = None
     headquarters: Optional[str] = None
     industry: Optional[str] = None
+    size: Optional[str] = None  # employee range, from the LinkedIn page snippet
     method: str = "none"        # llm | extracted | none
 
 
@@ -72,7 +74,7 @@ def trim_sentences(text: str, max_chars: int = 280) -> str:
 
 def build_evidence(
     *, home_url: str, home: Optional[PageInfo], org: dict, about_text: str,
-    wiki_text: str, wiki_url: str, snippets: list[dict],
+    wiki_text: str, wiki_url: str, snippets: list[dict], linkedin: Optional[LinkedInCompany] = None,
 ) -> tuple[str, list[str]]:
     """Returns (evidence text, source urls)."""
     parts: list[str] = []
@@ -98,6 +100,9 @@ def build_evidence(
     if site:
         parts.append("## Official website\n" + "\n".join(site))
         sources.append(home_url)
+    if linkedin and linkedin.evidence():
+        parts.append("## LinkedIn company page (from a search result)\n" + linkedin.evidence())
+        sources.append(linkedin.url)
     if wiki_text:
         parts.append(f"## Wikipedia\n{wiki_text[:1500]}")
         if wiki_url:
@@ -132,16 +137,22 @@ def validate_llm(data: dict, evidence: str) -> Overview:
     )
 
 
-def extract_overview(*, org: dict, home: Optional[PageInfo], wiki_text: str, snippets: list[dict], about_text: str) -> Overview:
+def extract_overview(
+    *, org: dict, home: Optional[PageInfo], wiki_text: str, snippets: list[dict], about_text: str,
+    linkedin: Optional[LinkedInCompany] = None,
+) -> Overview:
     """No-LLM fallback: first good description + regex-found founding year."""
+    li = linkedin
     desc = (
         org.get("description")
         or (home.meta.get("og:description") or home.meta.get("description") if home else "")
+        or (li.description if li else "")
         or wiki_text
         or next((r.get("body", "") for r in snippets or [] if r.get("body")), "")
         or about_text
     )
-    haystacks = [org.get("founded") and f"Founded in {org['founded']}", wiki_text, about_text,
+    haystacks = [org.get("founded") and f"Founded in {org['founded']}", li and li.founded and f"Founded in {li.founded}",
+                 wiki_text, about_text,
                  " ".join(r.get("body", "") for r in snippets or [])]
     founded = None
     for h in haystacks:
@@ -149,7 +160,9 @@ def extract_overview(*, org: dict, home: Optional[PageInfo], wiki_text: str, sni
         if founded:
             break
     return Overview(
-        summary=trim_sentences(desc, 280), founded=founded, headquarters=org.get("headquarters") or None,
+        summary=trim_sentences(desc, 280), founded=founded,
+        headquarters=org.get("headquarters") or (li.headquarters if li else "") or None,
+        industry=(li.industry if li else "") or None, size=(li.size if li else "") or None,
         method="extracted" if desc else "none",
     )
 
@@ -163,12 +176,14 @@ async def default_llm(system: str, user: str) -> dict:
 async def build_overview(
     name: str, *, home_url: str, home: Optional[PageInfo], org: dict, about_text: str,
     wiki_text: str, wiki_url: str, snippets: list[dict], llm: Optional[LlmFn] = None,
+    linkedin: Optional[LinkedInCompany] = None,
 ) -> tuple[Overview, list[str]]:
     evidence, sources = build_evidence(
         home_url=home_url, home=home, org=org, about_text=about_text,
-        wiki_text=wiki_text, wiki_url=wiki_url, snippets=snippets,
+        wiki_text=wiki_text, wiki_url=wiki_url, snippets=snippets, linkedin=linkedin,
     )
-    fallback = extract_overview(org=org, home=home, wiki_text=wiki_text, snippets=snippets, about_text=about_text)
+    fallback = extract_overview(org=org, home=home, wiki_text=wiki_text, snippets=snippets, about_text=about_text,
+                                linkedin=linkedin)
     if len(evidence) < 60:
         return fallback, sources
     try:
@@ -180,6 +195,8 @@ async def build_overview(
     if not ov.summary:
         return fallback, sources
     # facts the site itself states win over the model's reading of them
-    ov.founded = org.get("founded") or ov.founded or fallback.founded
+    ov.founded = org.get("founded") or ov.founded or (linkedin.founded if linkedin else None) or fallback.founded
     ov.headquarters = ov.headquarters or fallback.headquarters
+    ov.industry = ov.industry or fallback.industry
+    ov.size = fallback.size          # taken from LinkedIn as written, never from the model
     return ov, sources

@@ -173,6 +173,50 @@ export interface CandidateProfile {
   updated_at: string | null
 }
 
+// ---- company search
+export interface CompanyProfile {
+  key: string
+  name: string
+  website: string
+  domain: string
+  logo: string
+  summary: string
+  what_it_does: string
+  founded: string | null
+  headquarters: string | null
+  industry: string | null
+  size: string | null
+  linkedin_url: string
+  career_url: string
+  career_status: 'found' | 'guessed' | 'not_found'
+  ats: Array<{ provider: string; slug: string }>
+  sources: string[]
+  alternatives: Array<{ name: string; website: string; domain: string }>
+  links: Array<{ label: string; url: string }>
+  confidence: 'high' | 'medium' | 'low'
+  notes: string[]
+}
+/** A company from the platform's own list (the "popular companies" cards). */
+export interface FeaturedCompany {
+  id: number
+  name: string
+  slug: string | null
+  description: string | null
+  tech_stack: string[] | null
+  website: string | null
+}
+export interface CareerPageInfo {
+  url: string
+  status: 'ok' | 'boards_only' | 'js_rendered' | 'blocked' | 'empty' | 'unreachable'
+  jobs_found: number
+  note: string
+  ats: Array<{ provider: string; slug: string }>
+}
+export interface CompanyJobsResponse extends JobSearchResponse {
+  company: string
+  career_page: CareerPageInfo | null
+}
+
 function toQuery(params: Record<string, unknown>): string {
   const sp = new URLSearchParams()
   for (const [k, v] of Object.entries(params)) {
@@ -195,6 +239,13 @@ export const jobsApi = {
   companies: (q?: string) =>
     api<any[]>(`/api/v1/jobs/companies${q ? `?q=${encodeURIComponent(q)}` : ''}`),
   company: (id: number) => api<any>(`/api/v1/jobs/companies/${id}`),
+}
+
+export const companiesApi = {
+  lookup: (q: string, website?: string, signal?: AbortSignal) =>
+    api<CompanyProfile>(`/api/v1/companies/lookup${toQuery({ q, website })}`, { signal }),
+  jobs: (name: string, website: string, params: JobSearchParams, signal?: AbortSignal) =>
+    api<CompanyJobsResponse>(`/api/v1/companies/jobs${toQuery({ name, website, ...params })}`, { signal }),
 }
 
 export const profileApi = {

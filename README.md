@@ -49,6 +49,24 @@ Email:    admin@careerprep.local
 Password: admin12345
 ```
 
+## Company search
+
+`GET /api/v1/companies/lookup?q=<name or website>` identifies a company and returns a short, evidence-based
+intro (what it does, founded, headquarters), its career page and the other job portals to browse.
+`GET /api/v1/companies/jobs?name=...&website=...` then returns every job we can find for it, with the same
+filters as `/jobs/search`. Behind the second call, in order:
+
+1. the company's own career page (JSON-LD `JobPosting`, embedded JSON, or job links followed to their pages);
+2. its ATS board (Greenhouse, Lever, Ashby, Workable, SmartRecruiters, Recruitee), found from the career page,
+   or guessed from the company name and verified against the postings (so startups work too);
+3. your configured aggregators (JSearch / Adzuna / Jooble), narrowed to that company;
+4. job pages on LinkedIn / Naukri / Indeed / Wellfound found through web search (no direct scraping of those sites).
+
+Optional settings: `COMPANY_CACHE_TTL_SECONDS`, `COMPANY_LOOKUP_TIMEOUT_SECONDS`, `COMPANY_CAREER_BUDGET_SECONDS`,
+`COMPANY_WEB_SEARCH_ENABLED`. Controlled by the existing `company_search` feature flag. Pages that only render
+their job list with JavaScript can't be read; the UI says so and links to the page. Outbound fetches only
+go to public http(s) hosts (private/loopback/metadata addresses are refused, including after redirects).
+
 ## Auth
 
 - **Email/password** — works out of the box

@@ -16,6 +16,7 @@ export const SOURCES: Array<{ key: string; label: string }> = [
   { key: 'indeed', label: 'Indeed' },
   { key: 'glassdoor', label: 'Glassdoor' },
   { key: 'wellfound', label: 'Wellfound' },
+  { key: 'yc', label: 'Y Combinator' },
   { key: 'web', label: 'Web search' },
   { key: 'other', label: 'Other portals' },
 ]

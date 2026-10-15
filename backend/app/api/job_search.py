@@ -17,7 +17,7 @@ from app.api.feature_guard import require_feature
 from app.api.profile import get_latest_profile, profile_view
 from app.core.database import get_db
 from app.jobsearch.posting import SOURCE_LABELS, SearchFilters, source_label, source_priority
-from app.jobsearch.service import search_jobs
+from app.jobsearch.service import SearchResult, search_jobs
 from app.jobsearch.text import snippet
 from app.models.user import User
 
@@ -79,6 +79,30 @@ class SearchResponse(BaseModel):
     profile_used: bool = Field(description="True when match % was computed from the user's resume/profile")
 
 
+def build_search_response(res: SearchResult) -> SearchResponse:
+    """Shared by the Jobs search and the company jobs endpoints."""
+    out = []
+    for job, m in res.jobs:
+        out.append(JobResult(
+            id=job.uid, title=job.title, company=job.company, location=job.location,
+            remote=job.remote, work_mode=job.work_mode, url=job.url,
+            source=job.source, source_label=source_label(job.source), source_tier=source_priority(job.source),
+            posted_at=job.posted_at, snippet=snippet(job.description),
+            employment_type=job.employment_type, seniority=job.seniority,
+            salary_min=job.salary_min, salary_max=job.salary_max,
+            salary_currency=job.salary_currency, salary_text=job.salary_text,
+            experience_min=job.experience_min, experience_max=job.experience_max,
+            also_on=[AlsoOn(**a) for a in job.also_on],
+            match=MatchOut(score=m.score, matched_skills=m.matched_skills, missing_skills=m.missing_skills) if m else None,
+        ))
+    return SearchResponse(
+        results=out, total=res.total, page=res.page, page_size=res.page_size,
+        has_more=res.page * res.page_size < res.total,
+        sources=[SourceStatusOut(name=s.name, status=s.status, count=s.count, message=s.message) for s in res.sources],
+        facets=res.facets, profile_used=res.profile_used,
+    )
+
+
 @router.get("/search", response_model=SearchResponse, dependencies=[Depends(require_feature("job_search"))])
 async def search(
     q: str = Query("", max_length=120, description="Role / keywords"),
@@ -111,30 +135,12 @@ async def search(
     profile = profile_view(await get_latest_profile(db, user), user)
     res = await search_jobs(f, profile, page=page, page_size=page_size)
 
-    out = []
-    for job, m in res.jobs:
-        out.append(JobResult(
-            id=job.uid, title=job.title, company=job.company, location=job.location,
-            remote=job.remote, work_mode=job.work_mode, url=job.url,
-            source=job.source, source_label=source_label(job.source), source_tier=source_priority(job.source),
-            posted_at=job.posted_at, snippet=snippet(job.description),
-            employment_type=job.employment_type, seniority=job.seniority,
-            salary_min=job.salary_min, salary_max=job.salary_max,
-            salary_currency=job.salary_currency, salary_text=job.salary_text,
-            experience_min=job.experience_min, experience_max=job.experience_max,
-            also_on=[AlsoOn(**a) for a in job.also_on],
-            match=MatchOut(score=m.score, matched_skills=m.matched_skills, missing_skills=m.missing_skills) if m else None,
-        ))
-    return SearchResponse(
-        results=out, total=res.total, page=res.page, page_size=res.page_size,
-        has_more=res.page * res.page_size < res.total,
-        sources=[SourceStatusOut(name=s.name, status=s.status, count=s.count, message=s.message) for s in res.sources],
-        facets=res.facets, profile_used=res.profile_used,
-    )
+    return build_search_response(res)
 
 
 @router.get("/search/meta")
 async def search_meta(user: User = Depends(get_current_user)):
     """Source keys + labels for the filter UI."""
-    keys = ["career_page", "greenhouse", "lever", "ashby", "linkedin", "naukri", "indeed", "glassdoor", "other"]
+    keys = ["career_page", "greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee",
+            "linkedin", "naukri", "indeed", "glassdoor", "wellfound", "yc", "web", "other"]
     return {"sources": [{"key": k, "label": SOURCE_LABELS[k], "tier": source_priority(k)} for k in keys]}

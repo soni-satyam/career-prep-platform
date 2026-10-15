@@ -20,6 +20,8 @@ from app.jobsearch.company.discover import (
 from app.jobsearch.company.identify import (
     company_matches, domain_name_score, looks_like_url, pick_sites, slug_candidates,
 )
+from app.jobsearch.company.linkedin import parse_snippet, pick_linkedin
+from app.jobsearch.company.sources import result_to_job
 from app.jobsearch.company.overview import validate_llm
 from app.jobsearch.company.service import Toolbox, company_jobs, lookup_company
 from app.jobsearch.posting import SearchFilters
@@ -452,3 +454,131 @@ async def test_a_career_page_that_fails_is_reported_not_hidden(public_dns, monke
         jobs_service.set_client(None)
     assert out.career is not None and out.career.status == "unreachable"       # the UI says so instead of "no career page"
     assert out.result.total == 0
+
+
+# ------------------------------------------------------------------ startups: LinkedIn-assisted lookup
+# Snippet shapes below are modelled on how search engines show LinkedIn company pages; real snippets vary,
+# which is why every field is optional.
+
+LI_TAGLINE = {"href": "https://in.linkedin.com/company/acme-robotics-hq", "title": "Acme Robotics | LinkedIn",
+              "body": "Acme Robotics | 5,123 followers on LinkedIn. Automating warehouses with AI | Acme Robotics is a robotics startup in Pune."}
+LI_ABOUT = {"href": "https://www.linkedin.com/company/acme-robotics-hq/", "title": "Acme Robotics - LinkedIn",
+            "body": "About us. We build warehouse robots. Website: https://acme.io. Industry: Robotics Engineering. "
+                    "Company size: 11-50 employees. Headquarters: Pune, Maharashtra. Founded: 2023. Specialties: robotics, AI"}
+LI_NO_SITE = {"href": "https://www.linkedin.com/company/acme-robotics-hq", "title": "Acme Robotics | LinkedIn",
+              "body": "About us. We build warehouse robots. Industry: Robotics. Company size: 2-10 employees. "
+                      "Headquarters: Pune. Founded: 2023."}
+
+
+def test_linkedin_snippets_are_parsed_merged_and_filtered():
+    f = parse_snippet(LI_ABOUT["body"])
+    assert (f["website"], f["industry"], f["company size"], f["headquarters"], f["founded"]) == (
+        "https://acme.io", "Robotics Engineering", "11-50 employees", "Pune, Maharashtra", "2023")
+    t = parse_snippet(LI_TAGLINE["body"])
+    assert t["followers"] == "5,123" and t["description"].startswith("Automating warehouses")
+
+    other = {"href": "https://www.linkedin.com/company/other-co", "title": "Other Co | LinkedIn", "body": "Other Co | 10 followers on LinkedIn."}
+    job = {"href": "https://www.linkedin.com/jobs/view/123", "title": "Acme Robotics hiring", "body": ""}
+    hits = pick_linkedin([other, job, LI_TAGLINE, LI_ABOUT], "Acme Robotics")
+    assert [h.slug for h in hits] == ["acme-robotics-hq"]                       # not the other company, not a job page
+    assert hits[0].website == "https://acme.io" and hits[0].size == "11-50 employees"   # the two results were merged
+    assert hits[0].jobs_url == "https://www.linkedin.com/company/acme-robotics-hq/jobs/"
+    assert pick_linkedin([other], "Acme Robotics") == []
+
+
+def li_search(li_results, ats_results=(), site_results=()):
+    def search(q, n):
+        if q.startswith("site:linkedin.com/company"):
+            return list(li_results)
+        if "official website" in q:
+            return list(site_results)
+        if "careers jobs" in q:
+            return list(ats_results)
+        return []
+    return search
+
+
+@pytest.mark.asyncio
+async def test_startup_whose_site_search_misses_is_found_through_its_linkedin_page(public_dns):
+    jobs_service.reset_cache(); company_service._profiles.clear()
+    jobs_service.set_client(httpx.AsyncClient(transport=httpx.MockTransport(site_handler)))
+    try:
+        p = await lookup_company("acme robotics", settings=Settings(), tools=tools(search=li_search([LI_TAGLINE, LI_ABOUT])))
+    finally:
+        jobs_service.set_client(None)
+    assert p.website == "https://acme.io/" and p.confidence == "medium"            # website came from the LinkedIn page
+    assert p.name == "Acme Robotics"                                                 # properly cased from LinkedIn
+    assert p.linkedin is not None and p.linkedin.slug == "acme-robotics-hq"
+    assert p.overview.size == "11-50 employees"
+    assert dict((l["label"], l["url"]) for l in p.links)["LinkedIn"] == "https://www.linkedin.com/company/acme-robotics-hq/jobs/"
+    assert "https://www.linkedin.com/company/acme-robotics-hq/" in p.sources
+
+
+@pytest.mark.asyncio
+async def test_startup_with_no_website_at_all_still_gets_a_profile_from_linkedin(public_dns):
+    jobs_service.reset_cache(); company_service._profiles.clear()
+    jobs_service.set_client(httpx.AsyncClient(transport=httpx.MockTransport(lambda r: html("no", 404))))
+    try:
+        p = await lookup_company("Acme Robotics", settings=Settings(), tools=tools(search=li_search([LI_NO_SITE]), llm=_dead_llm))
+    finally:
+        jobs_service.set_client(None)
+    assert p.website == "" and p.confidence == "medium"
+    assert p.overview.summary.startswith("We build warehouse robots")
+    assert (p.overview.founded, p.overview.size, p.overview.headquarters, p.overview.industry) == ("2023", "2-10 employees", "Pune", "Robotics")
+    assert any("LinkedIn" in n for n in p.notes)
+
+
+async def _dead_llm(system, user):
+    raise RuntimeError("no llm")
+
+
+@pytest.mark.asyncio
+async def test_job_board_found_via_search_hit_and_via_the_linkedin_slug(public_dns):
+    jobs_service.reset_cache(); company_service._profiles.clear()
+    hits = [{"href": "https://jobs.lever.co/acmerobotics/abc", "title": "Backend Engineer", "body": ""},
+            {"href": "https://jobs.lever.co/unrelatedco/xyz", "title": "Chef", "body": ""}]
+    jobs_service.set_client(httpx.AsyncClient(transport=httpx.MockTransport(lambda r: html("no", 404))))
+    try:
+        p = await lookup_company("Acme Robotics", settings=Settings(),
+                                 tools=tools(search=li_search([LI_NO_SITE], ats_results=hits), llm=_dead_llm))
+    finally:
+        jobs_service.set_client(None)
+    assert [(b.provider, b.slug) for b in p.hint_boards] == [("lever", "acmerobotics")]      # lookalike slug dropped
+
+    # the board is named after the LinkedIn slug, not after the company: still found, and verified
+    def handler(req):
+        if req.url.host == "api.lever.co" and req.url.path.endswith("/acme-robotics-hq"):
+            return httpx.Response(200, json=LEVER)
+        return httpx.Response(404, json={})
+
+    jobs_service.set_client(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    try:
+        out = await company_jobs(p, SearchFilters(), None, settings=Settings(), search=lambda q, n: [])
+    finally:
+        jobs_service.set_client(None)
+    assert [(b.provider, b.slug) for b in out.boards] == [("lever", "acme-robotics-hq")]
+    assert {j.title for j, _ in out.result.jobs} == {"Backend Engineer", "Software Engineering Intern"}
+
+
+def test_startup_job_portals_are_recognised_in_web_results():
+    r = {"href": "https://www.ycombinator.com/companies/acme-robotics/jobs/Ab12-founding-engineer",
+         "title": "Founding Engineer at Acme Robotics | Y Combinator", "body": "Acme Robotics (YC S23) is hiring"}
+    j = result_to_job(r, "Acme Robotics", [], "")
+    assert j is not None and j.source == "yc" and j.title == "Founding Engineer"
+
+
+@pytest.mark.asyncio
+async def test_clicking_a_listed_company_pins_its_website_and_skips_the_ambiguous_search(public_dns):
+    """The "popular companies" cards send name + website; the lookup must trust that site, not search for it."""
+    jobs_service.reset_cache(); company_service._profiles.clear()
+    jobs_service.set_client(httpx.AsyncClient(transport=httpx.MockTransport(site_handler)))
+    queries: list[str] = []
+    try:
+        p = await lookup_company("Acme Robotics", website="https://acme.io", settings=Settings(),
+                                 tools=tools(search=lambda q, n: queries.append(q) or []))
+        again = await lookup_company("Acme Robotics", website="https://acme.io", settings=Settings(), tools=tools())
+    finally:
+        jobs_service.set_client(None)
+    assert not any("official website" in q for q in queries)                 # no guessing which "Acme Robotics"
+    assert p.website == "https://acme.io/" and p.name == "Acme Robotics" and p.confidence == "high"
+    assert again is p                                                          # second click is served from cache

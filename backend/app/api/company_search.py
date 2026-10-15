@@ -53,6 +53,8 @@ class CompanyProfileOut(BaseModel):
     founded: Optional[str]
     headquarters: Optional[str]
     industry: Optional[str]
+    size: Optional[str]
+    linkedin_url: str
     career_url: str
     career_status: str                 # found | guessed | not_found
     ats: list[AtsOut]
@@ -81,7 +83,7 @@ def _profile_out(p) -> CompanyProfileOut:
     return CompanyProfileOut(
         key=p.key, name=p.name, website=p.website, domain=p.domain, logo=p.logo,
         summary=o.summary, what_it_does=o.what_it_does, founded=o.founded, headquarters=o.headquarters,
-        industry=o.industry, career_url=p.career_url, career_status=p.career_status,
+        industry=o.industry, size=o.size, linkedin_url=p.linkedin.url if p.linkedin else "", career_url=p.career_url, career_status=p.career_status,
         ats=[AtsOut(provider=b.provider, slug=b.slug) for b in p.boards], sources=p.sources,
         alternatives=[AlternativeOut(**a) for a in p.alternatives], links=[LinkOut(**l) for l in p.links],
         confidence=p.confidence, notes=p.notes,

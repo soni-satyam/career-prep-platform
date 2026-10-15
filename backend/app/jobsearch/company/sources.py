@@ -119,8 +119,10 @@ def validate_board(jobs: list[JobPosting], name: str, domain: str) -> bool:
     return hits >= min(2, len(sample))
 
 
-async def probe_boards(ctx: SourceContext, name: str, domain: str, slugs: list[str]) -> list[AtsBoard]:
-    """Try the likely board slugs on every supported ATS; keep the ones that exist and belong to the company."""
+async def probe_boards(ctx: SourceContext, name: str, domain: str, slugs: list[str],
+                       hints: tuple[AtsBoard, ...] | list[AtsBoard] = ()) -> list[AtsBoard]:
+    """Try the likely board slugs on every supported ATS (plus boards a search result named); keep the ones
+    that exist and belong to the company."""
     async def one(provider: str, slug: str) -> Optional[AtsBoard]:
         try:
             jobs = await PROVIDERS[provider]([slug])._board(ctx, slug)    # noqa: SLF001 - cached download
@@ -128,7 +130,9 @@ async def probe_boards(ctx: SourceContext, name: str, domain: str, slugs: list[s
             return None
         return AtsBoard(provider, slug) if validate_board(jobs, name, domain) else None
 
-    res = await asyncio.gather(*[one(p, s) for p in PROBE_PROVIDERS for s in slugs])
+    pairs = list(dict.fromkeys([(p, s) for p in PROBE_PROVIDERS for s in slugs]
+                               + [(b.provider, b.slug) for b in hints if b.provider in PROBE_PROVIDERS]))
+    res = await asyncio.gather(*[one(p, s) for p, s in pairs])
     return [b for b in res if b]
 
 
@@ -141,9 +145,10 @@ _PORTALS: list[tuple[str, re.Pattern]] = [
     ("glassdoor", re.compile(r"glassdoor\.[a-z.]+/job-listing/", re.I)),
     ("wellfound", re.compile(r"wellfound\.com/(?:jobs/|company/[^/]+/jobs/)", re.I)),
     ("instahyre", re.compile(r"instahyre\.com/job-", re.I)),
+    ("yc", re.compile(r"(?:ycombinator\.com/companies/[^/]+/jobs/|workatastartup\.com/jobs/)", re.I)),
 ]
 _SITE_SUFFIX = re.compile(
-    r"\s*[|\-–—]\s*(?:LinkedIn|Naukri(?:\.com)?|Indeed(?:\.com)?|Glassdoor|Wellfound|AngelList(?: Talent)?|Instahyre)\b.*$", re.I)
+    r"\s*[|\-–—]\s*(?:LinkedIn|Naukri(?:\.com)?|Indeed(?:\.com)?|Glassdoor|Wellfound|AngelList(?: Talent)?|Instahyre|Y Combinator|Work at a Startup)\b.*$", re.I)
 _LISTING_TITLE = re.compile(r"^(?:jobs?|careers?|job openings?|open positions?|current openings?|hiring)\b", re.I)
 
 
@@ -226,7 +231,7 @@ class WebSearchSource(JobSource):
             f'"{c}" {role} jobs'.replace("  ", " "),
             f'{c} {role} jobs site:linkedin.com/jobs'.replace("  ", " "),
             f'{c} {role} jobs site:naukri.com'.replace("  ", " "),
-            f'{c} {role} jobs wellfound OR instahyre OR indeed'.replace("  ", " "),
+            f'{c} {role} jobs wellfound OR workatastartup OR instahyre OR indeed'.replace("  ", " "),
         ]
         batches = await asyncio.gather(*[asyncio.to_thread(self._run, q) for q in queries])
         seen: set[str] = set()
